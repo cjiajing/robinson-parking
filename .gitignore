@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.next/
+.vscode/
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Environment variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# macOS
+.DS_Store
+
+# Vercel
+.vercel
+
+# Backup files
+backup/
+*.backup
+*.zip
