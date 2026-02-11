@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Save, Bell, Info, MapPin, Edit } from 'lucide-react';
 
+export const dynamic = 'force-dynamic';
+
 export default function CheckInPage() {
   // State only - no localStorage at top level
   const [selectedLift, setSelectedLift] = useState('');
