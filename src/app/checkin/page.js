@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Bell, Info, MapPin } from 'lucide-react';
+import { ArrowLeft, Save, Bell, Info, MapPin, Edit } from 'lucide-react';
 
 export default function CheckInPage() {
   const [selectedLift, setSelectedLift] = useState('');
@@ -10,8 +10,19 @@ export default function CheckInPage() {
   const [palletNumber, setPalletNumber] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [showPalletInfo, setShowPalletInfo] = useState(false);
+  const [isEditingPallet, setIsEditingPallet] = useState(false);
 
-  // Calculate level from pallet (for display only)
+  // Load previous data if exists
+  useEffect(() => {
+    const savedCode = localStorage.getItem('parkingCode');
+    const savedPallet = localStorage.getItem('lastParkingPallet');
+    const savedLift = localStorage.getItem('lastParkingLift');
+    
+    if (savedCode) setCode(savedCode);
+    if (savedPallet) setPalletNumber(savedPallet);
+    if (savedLift) setSelectedLift(savedLift);
+  }, []);
+
   const calculateLevel = () => {
     if (!palletNumber || isNaN(palletNumber) || palletNumber < 1 || palletNumber > 56) {
       return null;
@@ -21,40 +32,28 @@ export default function CheckInPage() {
 
   const level = calculateLevel();
 
-  // Calculate estimated retrieval time based on level
-  const calculateEstimatedTime = () => {
-    if (!level) return { min: 2, max: 4 }; // Default if unknown
-    
-    const baseTime = 2; // Base 2 minutes for ground level
-    const perLevel = 0.5; // +30 seconds per level
-    
-    const minTime = baseTime + ((level - 1) * perLevel);
-    const maxTime = minTime + 1; // Add 1 minute variance
-    
-    return {
-      min: Math.round(minTime * 10) / 10, // Keep 1 decimal
-      max: Math.round(maxTime * 10) / 10
-    };
-  };
-
-  const estimatedTime = calculateEstimatedTime();
-
   const handleSave = () => {
-    if (code.length === 4 && selectedLift) {
-      // Save to localStorage
+    if (code.length === 4) {
+      // Always save code
       localStorage.setItem('parkingCode', code);
-      localStorage.setItem('lastParkingLift', selectedLift);
       localStorage.setItem('lastParkingTime', new Date().toISOString());
+      
+      // Save lift if selected
+      if (selectedLift) {
+        localStorage.setItem('lastParkingLift', selectedLift);
+      }
       
       // Save pallet if provided
       if (palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
         localStorage.setItem('lastParkingPallet', palletNumber);
         
         // Also save estimated lift based on pallet pattern
-        // Assuming alternating: odd = Lift A, even = Lift B
         const palletNum = parseInt(palletNumber);
         const estimatedLift = palletNum % 2 === 1 ? 'A' : 'B';
         localStorage.setItem('estimatedLiftFromPallet', estimatedLift);
+      } else {
+        // Remove pallet if cleared
+        localStorage.removeItem('lastParkingPallet');
       }
       
       setIsSaved(true);
@@ -66,13 +65,27 @@ export default function CheckInPage() {
     }
   };
 
-  // Load previous pallet if exists
-  useEffect(() => {
-    const savedPallet = localStorage.getItem('lastParkingPallet');
-    if (savedPallet) {
-      setPalletNumber(savedPallet);
+  const handleUpdatePalletOnly = () => {
+    if (palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
+      localStorage.setItem('lastParkingPallet', palletNumber);
+      
+      // Update estimated lift
+      const palletNum = parseInt(palletNumber);
+      const estimatedLift = palletNum % 2 === 1 ? 'A' : 'B';
+      localStorage.setItem('estimatedLiftFromPallet', estimatedLift);
+      
+      alert(`✅ Pallet updated to #${palletNumber} (Level ${level})`);
+      setIsEditingPallet(false);
+    } else if (palletNumber === '') {
+      localStorage.removeItem('lastParkingPallet');
+      alert('✅ Pallet number removed');
+      setIsEditingPallet(false);
     }
-  }, []);
+  };
+
+  // Check if user has existing parking data
+  const hasExistingParking = localStorage.getItem('parkingCode') && 
+    (localStorage.getItem('lastParkingLift') || localStorage.getItem('lastParkingPallet'));
 
   return (
     <div className="max-w-md mx-auto p-4">
@@ -82,138 +95,23 @@ export default function CheckInPage() {
           <ArrowLeft className="w-4 h-4" />
           Back
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900">Check In Car</h1>
-        <p className="text-gray-600">Record where you parked</p>
-      </header>
-
-      {/* Lift Selection */}
-      <div className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Select Lift</h2>
-        <div className="flex gap-4">
-          <button
-            onClick={() => setSelectedLift('A')}
-            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
-              selectedLift === 'A' 
-                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
-                : 'border-gray-200 bg-white text-gray-700'
-            }`}
-          >
-            Lift A
-          </button>
-          <button
-            onClick={() => setSelectedLift('B')}
-            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
-              selectedLift === 'B' 
-                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
-                : 'border-gray-200 bg-white text-gray-700'
-            }`}
-          >
-            Lift B
-          </button>
-        </div>
-        <p className="text-sm text-gray-500 mt-2 text-center">
-          If you don't know, you can skip this and enter pallet number below
+        <h1 className="text-2xl font-bold text-gray-900">
+          {hasExistingParking ? 'Update Parking' : 'Check In Car'}
+        </h1>
+        <p className="text-gray-600">
+          {hasExistingParking ? 'Update your parking details' : 'Record where you parked'}
         </p>
-      </div>
-
-      {/* Pallet Number Input */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            Pallet Number (Optional)
-          </h2>
-          <button
-            onClick={() => setShowPalletInfo(!showPalletInfo)}
-            className="text-gray-500 hover:text-gray-700"
-          >
-            <Info className="w-5 h-5" />
-          </button>
-        </div>
         
-        {showPalletInfo && (
-          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+        {hasExistingParking && (
+          <div className="mt-2 p-2 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>How to find your pallet:</strong>
-              <br />
-              1. After parking, check the display screen
-              <br />
-              2. Look for your license plate or 4-digit code
-              <br />
-              3. Note the pallet number shown (1-56)
-              <br />
-              4. Enter it here for better time estimates
+              You have existing parking data. You can update your pallet number or change lifts.
             </p>
           </div>
         )}
-        
-        <p className="text-gray-600 mb-4 text-sm">
-          Enter your pallet number (1-56) for accurate retrieval time estimates.
-          This helps us calculate average wait times.
-        </p>
-        
-        <div className="relative">
-          <div className="flex items-center gap-2 mb-2">
-            <MapPin className="w-4 h-4 text-gray-500" />
-            <span className="text-sm text-gray-600">Pallet 1-56 (7 levels × 8 pallets)</span>
-          </div>
-          
-          <input
-            type="number"
-            min="1"
-            max="56"
-            value={palletNumber}
-            onChange={(e) => {
-              const val = e.target.value;
-              // Allow empty or valid numbers 1-56
-              if (val === '' || (parseInt(val) >= 1 && parseInt(val) <= 56)) {
-                setPalletNumber(val);
-              }
-            }}
-            placeholder="e.g., 12"
-            className="w-full text-2xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
-          />
-          
-          {/* Pallet Info Display */}
-          {palletNumber && level && (
-            <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-              <div className="grid grid-cols-2 gap-4 text-center">
-                <div>
-                  <div className="text-sm text-gray-600">Level</div>
-                  <div className="text-xl font-bold">{level}/7</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-600">Est. Retrieval</div>
-                  <div className="text-xl font-bold">{estimatedTime.min}-{estimatedTime.max} min</div>
-                </div>
-              </div>
-              <div className="text-center mt-2 text-sm text-gray-500">
-                {parseInt(palletNumber) % 2 === 1 ? 
-                  'Likely Lift A (odd pallets)' : 
-                  'Likely Lift B (even pallets)'
-                }
-              </div>
-            </div>
-          )}
-          
-          {/* Quick pallet buttons */}
-          <div className="mt-3">
-            <p className="text-sm text-gray-600 mb-2">Common pallets by level:</p>
-            <div className="flex flex-wrap gap-2">
-              {[1, 9, 17, 25, 33, 41, 49].map((startPallet) => (
-                <button
-                  key={startPallet}
-                  onClick={() => setPalletNumber(startPallet.toString())}
-                  className="px-3 py-1 text-sm bg-gray-100 rounded-lg hover:bg-gray-200"
-                >
-                  Level {Math.ceil(startPallet/8)}: {startPallet}-{startPallet+7}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      </header>
 
-      {/* Code Input */}
+      {/* Code Input - REQUIRED and FIRST */}
       <div className="mb-8">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           4-Digit Code (Required)
@@ -257,11 +155,165 @@ export default function CheckInPage() {
         </div>
       </div>
 
+      {/* Lift Selection - OPTIONAL */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Select Lift (Optional)</h2>
+          <span className="text-sm text-gray-500">Optional</span>
+        </div>
+        <p className="text-gray-600 mb-4 text-sm">
+          If you know which lift you used, select it. Otherwise, you can enter pallet number below.
+        </p>
+        
+        <div className="flex gap-4">
+          <button
+            onClick={() => setSelectedLift('A')}
+            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
+              selectedLift === 'A' 
+                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
+                : 'border-gray-200 bg-white text-gray-700'
+            }`}
+          >
+            Lift A
+          </button>
+          <button
+            onClick={() => setSelectedLift('B')}
+            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
+              selectedLift === 'B' 
+                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
+                : 'border-gray-200 bg-white text-gray-700'
+            }`}
+          >
+            Lift B
+          </button>
+        </div>
+        
+        {/* Current selection display */}
+        {selectedLift && (
+          <div className="mt-3 p-2 bg-green-50 rounded-lg text-center">
+            <span className="text-green-800">Selected: Lift {selectedLift}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Pallet Number Input - OPTIONAL */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Pallet Number (Optional)
+          </h2>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">Optional</span>
+            <button
+              onClick={() => setShowPalletInfo(!showPalletInfo)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <Info className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        
+        {showPalletInfo && (
+          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+            <p className="text-sm text-blue-800">
+              <strong>How to find/update your pallet:</strong>
+              <br />
+              1. After parking, check the display screen
+              <br />
+              2. Look for your license plate or 4-digit code
+              <br />
+              3. Note the pallet number shown (1-56)
+              <br />
+              4. You can update this later if you forgot
+            </p>
+          </div>
+        )}
+        
+        <p className="text-gray-600 mb-4 text-sm">
+          Enter your pallet number (1-56) for accurate retrieval time estimates.
+          You can update this later if you forgot.
+        </p>
+        
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-2">
+            <MapPin className="w-4 h-4 text-gray-500" />
+            <span className="text-sm text-gray-600">Pallet 1-56 (7 levels × 8 pallets)</span>
+          </div>
+          
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min="1"
+              max="56"
+              value={palletNumber}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '' || (parseInt(val) >= 1 && parseInt(val) <= 56)) {
+                  setPalletNumber(val);
+                }
+              }}
+              placeholder="e.g., 12"
+              className="flex-1 text-2xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
+            />
+            
+            {hasExistingParking && (
+              <button
+                onClick={handleUpdatePalletOnly}
+                className="px-4 py-4 bg-gray-200 text-gray-800 rounded-xl font-medium hover:bg-gray-300 flex items-center gap-2"
+              >
+                <Edit className="w-4 h-4" />
+                Update
+              </button>
+            )}
+          </div>
+          
+          {/* Pallet Info Display */}
+          {palletNumber && level && (
+            <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+              <div className="grid grid-cols-2 gap-4 text-center">
+                <div>
+                  <div className="text-sm text-gray-600">Level</div>
+                  <div className="text-xl font-bold">{level}/7</div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600">Est. Retrieval</div>
+                  <div className="text-xl font-bold">
+                    {2 + (level - 1) * 0.5}-{3 + (level - 1) * 0.5} min
+                  </div>
+                </div>
+              </div>
+              <div className="text-center mt-2 text-sm text-gray-500">
+                {parseInt(palletNumber) % 2 === 1 ? 
+                  'Likely Lift A (odd pallets)' : 
+                  'Likely Lift B (even pallets)'
+                }
+              </div>
+            </div>
+          )}
+          
+          {/* Quick pallet buttons */}
+          <div className="mt-3">
+            <p className="text-sm text-gray-600 mb-2">Quick select by level:</p>
+            <div className="flex flex-wrap gap-2">
+              {[1, 9, 17, 25, 33, 41, 49].map((startPallet) => (
+                <button
+                  key={startPallet}
+                  onClick={() => setPalletNumber(startPallet.toString())}
+                  className="px-3 py-1 text-sm bg-gray-100 rounded-lg hover:bg-gray-200"
+                >
+                  L{Math.ceil(startPallet/8)}: {startPallet}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Reminder Setting */}
       <div className="mb-8 status-card">
         <div className="flex items-center gap-3 mb-3">
           <Bell className="w-5 h-5 text-gray-600" />
-          <h3 className="font-medium text-gray-900">Set Reminder</h3>
+          <h3 className="font-medium text-gray-900">Set Reminder (Optional)</h3>
         </div>
         <p className="text-sm text-gray-600 mb-3">
           Get reminded of your parking code when you usually leave.
@@ -275,27 +327,44 @@ export default function CheckInPage() {
         </select>
       </div>
 
-      {/* Save Button */}
+      {/* Save/Update Button */}
       <button
         onClick={handleSave}
-        disabled={!selectedLift || code.length !== 4}
+        disabled={code.length !== 4}
         className="w-full btn-primary flex items-center justify-center gap-2 py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <Save className="w-5 h-5" />
-        {isSaved ? '✓ Saved Successfully!' : 'Confirm Parking'}
+        {hasExistingParking ? 'Update Parking Details' : 'Confirm Parking'}
       </button>
 
       {/* Success Message */}
       {isSaved && (
         <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
           <div className="text-green-800 text-center">
-            <div className="font-bold">Parking details saved!</div>
+            <div className="font-bold">✓ Parking details saved!</div>
             <div className="text-sm mt-1">
-              {palletNumber ? `Pallet ${palletNumber} (Level ${level})` : 'Pallet not recorded'}
-              {' • '}
               Code: <span className="font-mono font-bold">{code}</span>
+              {selectedLift && ` • Lift: ${selectedLift}`}
+              {palletNumber && ` • Pallet: ${palletNumber} (L${level})`}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Update-Only Section for Existing Users */}
+      {hasExistingParking && !isEditingPallet && (
+        <div className="mt-6 p-4 bg-yellow-50 rounded-lg">
+          <h4 className="font-medium text-yellow-900 mb-2">Quick Updates</h4>
+          <p className="text-sm text-yellow-800 mb-3">
+            Just want to update your pallet number without changing other details?
+          </p>
+          <button
+            onClick={() => setIsEditingPallet(true)}
+            className="w-full py-3 bg-yellow-100 text-yellow-800 rounded-lg font-medium hover:bg-yellow-200 flex items-center justify-center gap-2"
+          >
+            <Edit className="w-4 h-4" />
+            Update Pallet Number Only
+          </button>
         </div>
       )}
 
@@ -303,35 +372,35 @@ export default function CheckInPage() {
       <div className="mt-6 p-4 bg-blue-50 rounded-lg">
         <h4 className="font-medium text-blue-800 mb-2 flex items-center gap-2">
           <Info className="w-4 h-4" />
-          How This Helps Everyone
+          How This Works
         </h4>
         <ul className="text-blue-700 text-sm space-y-1">
           <li className="flex gap-2">
             <span>•</span>
-            <span><strong>Pallet tracking</strong> helps calculate accurate retrieval times</span>
+            <span><strong>4-digit code is required</strong> - Use this to retrieve your car</span>
           </li>
           <li className="flex gap-2">
             <span>•</span>
-            <span><strong>Level data</strong> shows if higher levels take longer</span>
+            <span><strong>Lift is optional</strong> - Select if you remember</span>
           </li>
           <li className="flex gap-2">
             <span>•</span>
-            <span><strong>Future feature:</strong> Predict queue times based on car location</span>
+            <span><strong>Pallet is optional</strong> - Helps with time estimates</span>
           </li>
           <li className="flex gap-2">
             <span>•</span>
-            <span><strong>Anonymous data</strong> improves the system for all residents</span>
+            <span><strong>You can update later</strong> - Come back to add pallet number</span>
           </li>
         </ul>
         
         <div className="mt-4 pt-3 border-t border-blue-200">
-          <h5 className="font-medium text-blue-800 mb-2">How to Retrieve:</h5>
+          <h5 className="font-medium text-blue-800 mb-2">Retrieval Process:</h5>
           <ol className="text-blue-700 text-sm list-decimal list-inside space-y-1">
-            <li>Go to the touchscreen near the lifts</li>
+            <li>Go to touchscreen near lifts</li>
             <li>Tap "RETRIEVE VEHICLE"</li>
-            <li>Enter your 4-digit code: <span className="font-mono font-bold">{code || '____'}</span></li>
-            <li>System will show your pallet number</li>
-            <li>Wait for lift to deliver your car</li>
+            <li>Enter code: <span className="font-mono font-bold">{code || '____'}</span></li>
+            <li>System shows pallet number</li>
+            <li>Wait for lift to deliver</li>
           </ol>
         </div>
       </div>
