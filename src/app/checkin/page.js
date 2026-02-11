@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Save, Info, Edit } from 'lucide-react';
 
-// Add this line to disable static rendering
+// ADD THIS LINE - it's the most important fix
 export const dynamic = 'force-dynamic';
 
 export default function CheckInPage() {
@@ -16,41 +16,34 @@ export default function CheckInPage() {
   const [showPalletInfo, setShowPalletInfo] = useState(false);
   const [hasExistingParking, setHasExistingParking] = useState(false);
   const [isClient, setIsClient] = useState(false);
-  const [level, setLevel] = useState(null);
 
-  // Set client flag
+  // Set client flag and load data
   useEffect(() => {
     setIsClient(true);
+    
+    // Now we can safely access localStorage
+    const savedCode = localStorage.getItem('parkingCode');
+    const savedPallet = localStorage.getItem('lastParkingPallet');
+    const savedLift = localStorage.getItem('lastParkingLift');
+    
+    if (savedCode) setCode(savedCode);
+    if (savedPallet) setPalletNumber(savedPallet);
+    if (savedLift) setSelectedLift(savedLift);
+    
+    if (savedCode && savedLift) {
+      setHasExistingParking(true);
+    }
   }, []);
 
-  // Load data from localStorage
-  useEffect(() => {
-    if (isClient) {
-      const savedCode = localStorage.getItem('parkingCode');
-      const savedPallet = localStorage.getItem('lastParkingPallet');
-      const savedLift = localStorage.getItem('lastParkingLift');
-      
-      if (savedCode) setCode(savedCode);
-      if (savedPallet) setPalletNumber(savedPallet);
-      if (savedLift) setSelectedLift(savedLift);
-      
-      if (savedCode && savedLift) {
-        setHasExistingParking(true);
-      }
+  // Calculate level (client-side only)
+  const calculateLevel = () => {
+    if (!isClient || !palletNumber || isNaN(palletNumber) || palletNumber < 1 || palletNumber > 56) {
+      return null;
     }
-  }, [isClient]);
+    return Math.ceil(parseInt(palletNumber) / 8);
+  };
 
-  // Calculate level in useEffect to avoid SSR issues
-  useEffect(() => {
-    if (!isClient || !palletNumber || palletNumber === '' || isNaN(parseInt(palletNumber)) || parseInt(palletNumber) < 1 || parseInt(palletNumber) > 56) {
-      setLevel(null);
-      return;
-    }
-    
-    const palletNum = parseInt(palletNumber);
-    const calculatedLevel = Math.ceil(palletNum / 8);
-    setLevel(calculatedLevel);
-  }, [palletNumber, isClient]);
+  const level = calculateLevel();
 
   const handleSave = () => {
     if (code.length === 4 && selectedLift && isClient) {
@@ -60,7 +53,7 @@ export default function CheckInPage() {
       localStorage.setItem('lastParkingTime', new Date().toISOString());
       
       // Save pallet if provided
-      if (palletNumber && palletNumber !== '' && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
+      if (palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
         localStorage.setItem('lastParkingPallet', palletNumber);
       } else {
         localStorage.removeItem('lastParkingPallet');
@@ -74,7 +67,7 @@ export default function CheckInPage() {
   };
 
   const handleUpdatePalletOnly = () => {
-    if (isClient && palletNumber && palletNumber !== '' && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
+    if (isClient && palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
       localStorage.setItem('lastParkingPallet', palletNumber);
       alert(`✅ Pallet updated to #${palletNumber} ${level ? `(Level ${level})` : ''}`);
     } else if (isClient && palletNumber === '') {
@@ -88,10 +81,10 @@ export default function CheckInPage() {
     return (
       <div className="max-w-md mx-auto p-4">
         <header className="mb-6">
-          <div className="inline-flex items-center gap-2 text-gray-600 mb-4">
+          <Link href="/" className="inline-flex items-center gap-2 text-gray-600 mb-4">
             <ArrowLeft className="w-4 h-4" />
             Back
-          </div>
+          </Link>
           <h1 className="text-2xl font-bold text-gray-900">Check In Car</h1>
           <p className="text-gray-600">Loading...</p>
         </header>
@@ -156,7 +149,7 @@ export default function CheckInPage() {
         <div className="relative">
           <input
             type="text"
-            maxLength={4}
+            maxLength="4"
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
             placeholder="1234"
