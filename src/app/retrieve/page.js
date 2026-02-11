@@ -3,9 +3,11 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Car, Clock, Users, Bell } from 'lucide-react';
-import { supabase } from '/lib/supabase';
 
 export const dynamic = 'force-dynamic';
+
+// Simple in-memory queue
+let globalQueue = [];
 
 export default function RetrieveCarPage() {
   const [selectedLift, setSelectedLift] = useState('');
@@ -15,7 +17,7 @@ export default function RetrieveCarPage() {
   const [userId, setUserId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Generate or get user ID
+  // Initialize user ID and load queue
   useEffect(() => {
     let storedId = localStorage.getItem('parking-user-id');
     if (!storedId) {
@@ -23,147 +25,89 @@ export default function RetrieveCarPage() {
       localStorage.setItem('parking-user-id', storedId);
     }
     setUserId(storedId);
+    
+    // Load queue from localStorage
+    const savedQueue = localStorage.getItem('parking-queue-data');
+    if (savedQueue) {
+      try {
+        globalQueue = JSON.parse(savedQueue);
+      } catch (e) {
+        console.log('No saved queue');
+      }
+    }
+    
+    setIsLoading(false);
   }, []);
 
-  // Listen to queue changes in real-time
-  useEffect(() => {
-    if (!userId) return;
-
-    const channel = supabase
-      .channel('queue-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'parking_queue',
-        },
-        async () => {
-          await updateQueueInfo();
-        }
-      )
-      .subscribe();
-
-    // Initial load
-    updateQueueInfo();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [userId, selectedLift]);
-
-  const updateQueueInfo = async () => {
-    if (!userId) return;
-
-    // Get all waiting users for selected lift
-    const { data: queue, error } = await supabase
-      .from('parking_queue')
-      .select('*')
-      .eq('status', 'waiting')
-      .eq('lift', selectedLift)
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      console.error('Error fetching queue:', error);
-      return;
-    }
-
-    setQueueLength(queue.length);
-
-    // Find user's position
-    const userInQueue = queue.find(item => item.user_id === userId);
+  // Update queue info
+  const updateQueueInfo = () => {
+    if (!selectedLift) return;
+    
+    const liftQueue = globalQueue.filter(item => 
+      item.lift === selectedLift && item.status === 'waiting'
+    );
+    
+    setQueueLength(liftQueue.length);
+    
+    const userInQueue = liftQueue.find(item => item.userId === userId);
     if (userInQueue) {
-      const position = queue.findIndex(item => item.user_id === userId) + 1;
+      const position = liftQueue.findIndex(item => item.userId === userId) + 1;
       setQueuePosition(position);
       setIsInQueue(true);
     } else {
       setQueuePosition(null);
       setIsInQueue(false);
     }
-
-    setIsLoading(false);
+    
+    // Save to localStorage
+    localStorage.setItem('parking-queue-data', JSON.stringify(globalQueue));
   };
 
-  const handleJoinQueue = async () => {
+  // Check for updates every 3 seconds
+  useEffect(() => {
+    updateQueueInfo();
+    const interval = setInterval(updateQueueInfo, 3000);
+    return () => clearInterval(interval);
+  }, [selectedLift, userId]);
+
+  const handleJoinQueue = () => {
     if (!selectedLift || !userId) return;
-
-    // Check if already in queue
-    const { data: existing } = await supabase
-      .from('parking_queue')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('status', 'waiting')
-      .single();
-
-    if (existing) {
-      alert('You are already in the queue!');
-      return;
-    }
-
-    // Join queue
-    const { error } = await supabase
-      .from('parking_queue')
-      .insert([
-        {
-          user_id: userId,
-          lift: selectedLift,
-          status: 'waiting'
-        }
-      ]);
-
-    if (error) {
-      console.error('Error joining queue:', error);
-      alert('Failed to join queue. Please try again.');
-    } else {
-      alert(`You have joined the queue for Lift ${selectedLift}`);
-    }
+    
+    // Remove if already in queue
+    globalQueue = globalQueue.filter(item => 
+      !(item.userId === userId && item.status === 'waiting')
+    );
+    
+    // Add to queue
+    globalQueue.push({
+      userId,
+      lift: selectedLift,
+      status: 'waiting',
+      joinedAt: new Date().toISOString()
+    });
+    
+    updateQueueInfo();
+    alert(`Joined queue for Lift ${selectedLift}`);
   };
 
-  const handleLeaveQueue = async () => {
-    if (!userId) return;
-
-    const { error } = await supabase
-      .from('parking_queue')
-      .update({ status: 'cancelled' })
-      .eq('user_id', userId)
-      .eq('status', 'waiting');
-
-    if (error) {
-      console.error('Error leaving queue:', error);
-    } else {
-      alert('You have left the queue');
-      setIsInQueue(false);
-      setQueuePosition(null);
-    }
+  const handleLeaveQueue = () => {
+    globalQueue = globalQueue.filter(item => 
+      !(item.userId === userId && item.status === 'waiting')
+    );
+    updateQueueInfo();
+    alert('Left the queue');
   };
 
-  const handleCarRetrieved = async () => {
-    if (!userId) return;
-
-    // Mark as completed
-    const { error } = await supabase
-      .from('parking_queue')
-      .update({ 
-        status: 'completed',
-        completed_at: new Date().toISOString()
-      })
-      .eq('user_id', userId)
-      .eq('status', 'waiting');
-
-    if (error) {
-      console.error('Error updating status:', error);
-    } else {
-      alert('Car retrieved successfully!');
-      setIsInQueue(false);
-      setQueuePosition(null);
-    }
+  const handleCarRetrieved = () => {
+    globalQueue = globalQueue.filter(item => 
+      !(item.userId === userId && item.status === 'waiting')
+    );
+    updateQueueInfo();
+    alert('Car retrieved!');
   };
 
-  // Calculate estimated wait time
   const calculateWaitTime = () => {
     if (!queuePosition) return 'N/A';
-    
-    // Assuming 5 minutes per car
     const minutes = (queuePosition - 1) * 5;
     if (minutes === 0) return 'Ready now';
     if (minutes < 60) return `${minutes} minutes`;
@@ -179,7 +123,7 @@ export default function RetrieveCarPage() {
             Back
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">Retrieve Car</h1>
-          <p className="text-gray-600">Loading queue...</p>
+          <p className="text-gray-600">Loading...</p>
         </header>
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-parking-blue mx-auto"></div>
@@ -190,7 +134,6 @@ export default function RetrieveCarPage() {
 
   return (
     <div className="max-w-md mx-auto p-4">
-      {/* Header */}
       <header className="mb-6">
         <Link href="/" className="inline-flex items-center gap-2 text-gray-600 mb-4">
           <ArrowLeft className="w-4 h-4" />
@@ -200,7 +143,6 @@ export default function RetrieveCarPage() {
         <p className="text-gray-600">Join queue to retrieve your vehicle</p>
       </header>
 
-      {/* Lift Selection */}
       <div className="mb-8">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           1. Select Lift <span className="text-red-500">*</span>
@@ -229,7 +171,6 @@ export default function RetrieveCarPage() {
         </div>
       </div>
 
-      {/* Queue Info */}
       {selectedLift && (
         <div className="mb-8">
           <div className="bg-gray-50 rounded-xl p-4 mb-4">
@@ -248,7 +189,6 @@ export default function RetrieveCarPage() {
             </p>
           </div>
 
-          {/* User's Queue Status */}
           {isInQueue ? (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between mb-2">
@@ -289,14 +229,13 @@ export default function RetrieveCarPage() {
         </div>
       )}
 
-      {/* Real-time Notice */}
       <div className="mt-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
         <div className="flex items-start gap-2">
           <Bell className="w-5 h-5 text-blue-600 mt-0.5" />
           <div>
-            <p className="text-sm text-blue-800 font-medium">Live Updates</p>
+            <p className="text-sm text-blue-800 font-medium">Note</p>
             <p className="text-xs text-blue-600">
-              Queue updates in real-time. Your position will update automatically.
+              Queue is saved to your browser. Other devices won't see updates.
             </p>
           </div>
         </div>
