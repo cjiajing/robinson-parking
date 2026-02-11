@@ -90,38 +90,51 @@ export default function RetrieveCarPage() {
   }, [userId, selectedLift]);
 
   const handleJoinQueue = async () => {
-    if (!selectedLift || !userId) return;
+  if (!selectedLift || !userId) return;
 
+  try {
     // Check if already in queue
-    const { data: existing } = await supabase
+    const { data: existing, error: checkError } = await supabase
       .from('parking_queue')
       .select('*')
       .eq('user_id', userId)
       .eq('status', 'waiting')
       .maybeSingle();
 
+    if (checkError) {
+      console.error('Error checking queue:', checkError);
+      alert('Error checking queue status');
+      return;
+    }
+
     if (existing) {
       alert('You are already in the queue!');
       return;
     }
 
-    // Join queue
+    // Join queue - let database set created_at automatically
     const { error } = await supabase
       .from('parking_queue')
       .insert([
         {
           user_id: userId,
           lift: selectedLift,
-          status: 'waiting',
-          created_at: new Date().toISOString()
+          status: 'waiting'
+          // Don't include created_at - let database use default now()
         }
       ]);
 
     if (error) {
       console.error('Error joining queue:', error);
-      alert('Failed to join queue. Please try again.');
+      alert(`Failed to join queue: ${error.message}`);
+    } else {
+      alert(`✅ Joined queue for Lift ${selectedLift}`);
     }
-  };
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    alert('An unexpected error occurred');
+  }
+};
 
   const handleLeaveQueue = async () => {
     if (!userId) return;
