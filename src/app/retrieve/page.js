@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Car, Clock, Users, Bell } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { supabase } from 'lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
