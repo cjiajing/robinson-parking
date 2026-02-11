@@ -15,32 +15,45 @@ export default function Home() {
   const [userCode, setUserCode] = useState('');
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [dismissedAlerts, setDismissedAlerts] = useState([]);
+  
+  // Consent state
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+  const [showConsent, setShowConsent] = useState(false);
 
-  // Load user's code from localStorage
+  // Check if user has accepted terms
   useEffect(() => {
+    const accepted = localStorage.getItem('terms-accepted');
+    if (accepted === 'true') {
+      setHasAcceptedTerms(true);
+    } else {
+      setShowConsent(true);
+    }
+
     const savedCode = localStorage.getItem('parkingCode');
     if (savedCode) setUserCode(savedCode);
 
-    // Load active alerts from localStorage (managed by admin)
     const savedAlerts = localStorage.getItem('activeAlerts');
     if (savedAlerts) {
       setActiveAlerts(JSON.parse(savedAlerts));
     }
-    // NO DEFAULT DEMO ALERT
 
-    // Load dismissed alerts
     const savedDismissed = localStorage.getItem('dismissedAlerts');
     if (savedDismissed) {
       setDismissedAlerts(JSON.parse(savedDismissed));
     }
 
-    // Update timestamp every minute (no queue simulation)
     const interval = setInterval(() => {
       setLastUpdated(new Date());
     }, 60000);
 
     return () => clearInterval(interval);
   }, []);
+
+  const acceptTerms = () => {
+    localStorage.setItem('terms-accepted', 'true');
+    setHasAcceptedTerms(true);
+    setShowConsent(false);
+  };
 
   const dismissAlert = (alertId) => {
     setActiveAlerts(prev => prev.filter(alert => alert.id !== alertId));
@@ -76,14 +89,78 @@ export default function Home() {
     }
   };
 
-  const getStatusIcon = (status) => {
-    switch(status) {
-      case 'normal': return <Wifi className="w-6 h-6" />;
-      case 'warning': return <AlertTriangle className="w-6 h-6" />;
-      case 'error': return <WifiOff className="w-6 h-6" />;
-    }
-  };
+  // If showing consent, render consent modal
+  if (showConsent) {
+    return (
+      <div className="max-w-md mx-auto p-4 min-h-screen flex items-center justify-center">
+        <div className="bg-white rounded-2xl shadow-xl p-6 w-full">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Car className="w-8 h-8 text-parking-blue" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+              Welcome to Robinson Suites Parking
+            </h1>
+            <p className="text-gray-600">
+              Please review and accept our terms to continue
+            </p>
+          </div>
 
+          <div className="bg-gray-50 rounded-xl p-4 mb-6 text-sm">
+            <p className="text-gray-700 mb-3">
+              <span className="font-bold text-parking-blue">Important:</span> This is an unofficial community tool and is not affiliated with the building management.
+            </p>
+            <ul className="space-y-2 text-gray-600">
+              <li className="flex items-start gap-2">
+                <span className="text-green-600 mt-1">✓</span>
+                <span>Queue positions are voluntary and not guaranteed</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-green-600 mt-1">✓</span>
+                <span>We collect anonymous usage data to improve the service</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-green-600 mt-1">✓</span>
+                <span>You can delete your data at any time</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-red-600 mt-1">⚠</span>
+                <span>Do not use this app in emergencies - call +65 8126 0005</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <Link 
+              href="/terms" 
+              className="text-sm text-parking-blue hover:underline text-center"
+            >
+              Read Terms of Service
+            </Link>
+            <Link 
+              href="/privacy" 
+              className="text-sm text-parking-blue hover:underline text-center mb-2"
+            >
+              Read Privacy Policy
+            </Link>
+            
+            <button
+              onClick={acceptTerms}
+              className="w-full py-3 bg-parking-blue text-white rounded-xl font-semibold hover:bg-parking-blue/90 transition-colors"
+            >
+              I Understand & Accept
+            </button>
+            
+            <p className="text-xs text-gray-400 text-center mt-2">
+              By accepting, you agree to our Terms of Service and Privacy Policy
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main app content (only shown after consent)
   return (
     <div className="max-w-md mx-auto p-4 pb-20">
       {/* Header */}
@@ -111,9 +188,19 @@ export default function Home() {
             Updated: {formatTime(lastUpdated)}
           </div>
         </div>
+        
+        {/* Consent reminder - small badge */}
+        <div className="mt-2 text-right">
+          <Link href="/terms" className="text-xs text-gray-400 hover:text-gray-600">
+            Legal ✓
+          </Link>
+        </div>
       </header>
 
-      {/* Dynamic Alert Banners (Empty by default) */}
+      {/* Rest of your existing homepage content... */}
+      {/* (Keep all your existing code from here) */}
+      
+      {/* Dynamic Alert Banners */}
       {activeAlerts.filter(alert => !dismissedAlerts.includes(alert.id)).map((alert) => (
         <div key={alert.id} className={`mb-4 rounded-xl p-4 border ${
           alert.priority === 'high' ? 'bg-red-50 border-red-200' :
@@ -228,7 +315,6 @@ export default function Home() {
           </div>
         </div>
         
-        {/* Note about queue */}
         <div className="mt-4 text-center text-sm text-gray-500">
           Queue counts update when users join/leave via the Retrieve page
         </div>
