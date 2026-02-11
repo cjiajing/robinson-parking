@@ -13,6 +13,7 @@ export default function CheckInPage() {
   const [showPalletInfo, setShowPalletInfo] = useState(false);
   const [hasExistingParking, setHasExistingParking] = useState(false);
   const [isClient, setIsClient] = useState(false);
+  const [level, setLevel] = useState<number | null>(null);
 
   // Set client flag and load data
   useEffect(() => {
@@ -32,15 +33,17 @@ export default function CheckInPage() {
     }
   }, []);
 
-  // Calculate level (client-side only)
-  const calculateLevel = () => {
-    if (!isClient || !palletNumber || isNaN(palletNumber) || palletNumber < 1 || palletNumber > 56) {
-      return null;
+  // Calculate level in useEffect to avoid SSR issues
+  useEffect(() => {
+    if (!isClient || !palletNumber || isNaN(parseInt(palletNumber)) || parseInt(palletNumber) < 1 || parseInt(palletNumber) > 56) {
+      setLevel(null);
+      return;
     }
-    return Math.ceil(parseInt(palletNumber) / 8);
-  };
-
-  const level = calculateLevel();
+    
+    const palletNum = parseInt(palletNumber);
+    const calculatedLevel = Math.ceil(palletNum / 8);
+    setLevel(calculatedLevel);
+  }, [palletNumber, isClient]);
 
   const handleSave = () => {
     if (code.length === 4 && selectedLift && isClient) {
@@ -146,7 +149,7 @@ export default function CheckInPage() {
         <div className="relative">
           <input
             type="text"
-            maxLength="4"
+            maxLength={4}
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
             placeholder="1234"
