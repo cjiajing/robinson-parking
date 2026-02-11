@@ -10,9 +10,11 @@ export default function CheckInPage() {
   const [palletNumber, setPalletNumber] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [showPalletInfo, setShowPalletInfo] = useState(false);
+  const [hasExistingParking, setHasExistingParking] = useState(false);
 
-  // Load previous data if exists
+  // Load previous data if exists - SAFELY in useEffect
   useEffect(() => {
+    // This only runs in the browser
     const savedCode = localStorage.getItem('parkingCode');
     const savedPallet = localStorage.getItem('lastParkingPallet');
     const savedLift = localStorage.getItem('lastParkingLift');
@@ -20,6 +22,11 @@ export default function CheckInPage() {
     if (savedCode) setCode(savedCode);
     if (savedPallet) setPalletNumber(savedPallet);
     if (savedLift) setSelectedLift(savedLift);
+    
+    // Check if user has existing parking data
+    if (savedCode && savedLift) {
+      setHasExistingParking(true);
+    }
   }, []);
 
   const calculateLevel = () => {
@@ -52,6 +59,7 @@ export default function CheckInPage() {
       }
       
       setIsSaved(true);
+      setHasExistingParking(true);
       
       // Show success message
       setTimeout(() => {
@@ -75,9 +83,6 @@ export default function CheckInPage() {
       alert('✅ Pallet number removed');
     }
   };
-
-  // Check if user has existing parking data
-  const hasExistingParking = localStorage.getItem('parkingCode') && localStorage.getItem('lastParkingLift');
 
   return (
     <div className="max-w-md mx-auto p-4">
