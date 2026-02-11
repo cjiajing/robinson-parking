@@ -11,7 +11,7 @@ import Link from 'next/link';
 export default function Home() {
   const [systemStatus, setSystemStatus] = useState('operational');
   const [liftA, setLiftA] = useState({ status: 'normal', queue: 0 });
-  const [liftB, setLiftB] = useState({ status: 'normal', queue: 1 });
+  const [liftB, setLiftB] = useState({ status: 'normal', queue: 0 });
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [userCode, setUserCode] = useState('');
 
