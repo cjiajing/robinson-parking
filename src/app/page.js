@@ -1,10 +1,9 @@
-
 'use client';
 
 import { useState, useEffect } from 'react';
 import { 
   Wifi, WifiOff, AlertTriangle, Calendar, 
-  Car, Users, Clock, Phone
+  Car, Users, Clock, Phone, X
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -14,32 +13,57 @@ export default function Home() {
   const [liftB, setLiftB] = useState({ status: 'normal', queue: 0 });
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [userCode, setUserCode] = useState('');
+  const [activeAlerts, setActiveAlerts] = useState([]);
+  const [dismissedAlerts, setDismissedAlerts] = useState([]);
 
-  // Load user's code from localStorage - SAFELY
+  // Load user's code from localStorage
   useEffect(() => {
     const savedCode = localStorage.getItem('parkingCode');
     if (savedCode) setUserCode(savedCode);
-  }, []);
 
-  // Mock data updates
-  useEffect(() => {
+    // Load active alerts from localStorage (managed by admin)
+    const savedAlerts = localStorage.getItem('activeAlerts');
+    if (savedAlerts) {
+      setActiveAlerts(JSON.parse(savedAlerts));
+    }
+    // NO DEFAULT DEMO ALERT
+
+    // Load dismissed alerts
+    const savedDismissed = localStorage.getItem('dismissedAlerts');
+    if (savedDismissed) {
+      setDismissedAlerts(JSON.parse(savedDismissed));
+    }
+
+    // Update timestamp every minute (no queue simulation)
     const interval = setInterval(() => {
       setLastUpdated(new Date());
-      // Simulate random queue changes
-      setLiftA(prev => ({ 
-        ...prev, 
-        queue: Math.max(0, prev.queue + Math.floor(Math.random() * 3) - 1)
-      }));
-    }, 30000); // Update every 30 seconds
+    }, 60000);
 
     return () => clearInterval(interval);
   }, []);
+
+  const dismissAlert = (alertId) => {
+    setActiveAlerts(prev => prev.filter(alert => alert.id !== alertId));
+    setDismissedAlerts(prev => [...prev, alertId]);
+    localStorage.setItem('dismissedAlerts', JSON.stringify([...dismissedAlerts, alertId]));
+    localStorage.setItem('activeAlerts', JSON.stringify(activeAlerts.filter(alert => alert.id !== alertId)));
+  };
 
   const formatTime = (date) => {
     return date.toLocaleTimeString('en-SG', { 
       hour: '2-digit', 
       minute: '2-digit',
       hour12: false 
+    });
+  };
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-SG', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     });
   };
 
@@ -89,21 +113,77 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Alert Banner */}
-      <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
-          <div>
-            <h3 className="font-medium text-yellow-800">Monthly Maintenance</h3>
-            <p className="text-yellow-700 text-sm mt-1">
-              Tonight 10:00 PM - 2:00 AM. Both lifts unavailable.
-            </p>
-            <Link href="/calendar" className="text-yellow-800 font-medium text-sm mt-2 inline-block">
-              View schedule →
-            </Link>
+      {/* Dynamic Alert Banners (Empty by default) */}
+      {activeAlerts.filter(alert => !dismissedAlerts.includes(alert.id)).map((alert) => (
+        <div key={alert.id} className={`mb-4 rounded-xl p-4 border ${
+          alert.priority === 'high' ? 'bg-red-50 border-red-200' :
+          alert.priority === 'medium' ? 'bg-yellow-50 border-yellow-200' :
+          'bg-blue-50 border-blue-200'
+        }`}>
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-3 flex-1">
+              <AlertTriangle className={`w-5 h-5 mt-0.5 ${
+                alert.priority === 'high' ? 'text-red-600' :
+                alert.priority === 'medium' ? 'text-yellow-600' :
+                'text-blue-600'
+              }`} />
+              <div className="flex-1">
+                <div className="flex justify-between items-start">
+                  <h3 className={`font-medium ${
+                    alert.priority === 'high' ? 'text-red-800' :
+                    alert.priority === 'medium' ? 'text-yellow-800' :
+                    'text-blue-800'
+                  }`}>
+                    {alert.title}
+                  </h3>
+                  <button
+                    onClick={() => dismissAlert(alert.id)}
+                    className="text-gray-400 hover:text-gray-600 ml-2"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className={`text-sm mt-1 ${
+                  alert.priority === 'high' ? 'text-red-700' :
+                  alert.priority === 'medium' ? 'text-yellow-700' :
+                  'text-blue-700'
+                }`}>
+                  {alert.message}
+                </p>
+                {alert.date && (
+                  <div className={`text-xs mt-2 ${
+                    alert.priority === 'high' ? 'text-red-600' :
+                    alert.priority === 'medium' ? 'text-yellow-600' :
+                    'text-blue-600'
+                  }`}>
+                    Posted: {formatDate(alert.date)}
+                  </div>
+                )}
+                {alert.type === 'maintenance' && (
+                  <Link href="/calendar" className="inline-block mt-2 font-medium text-sm">
+                    View schedule →
+                  </Link>
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ))}
+
+      {/* No alerts message */}
+      {activeAlerts.filter(alert => !dismissedAlerts.includes(alert.id)).length === 0 && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl">
+          <div className="flex items-start gap-3">
+            <div className="w-5 h-5 mt-0.5">✅</div>
+            <div>
+              <h3 className="font-medium text-green-800">All Systems Normal</h3>
+              <p className="text-green-700 text-sm mt-1">
+                No scheduled maintenance or issues reported.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Lift Status */}
       <div className="mb-8">
@@ -147,6 +227,11 @@ export default function Home() {
             </div>
           </div>
         </div>
+        
+        {/* Note about queue */}
+        <div className="mt-4 text-center text-sm text-gray-500">
+          Queue counts update when users join/leave via the Retrieve page
+        </div>
       </div>
 
       {/* My Code Display */}
@@ -157,7 +242,7 @@ export default function Home() {
             {userCode}
           </div>
           <p className="text-sm text-gray-600 text-center mt-2">
-            Enter this 4-digit code on the touchscreen
+            Enter this 4-digit code on the touchscreen to retrieve your car
           </p>
         </div>
       )}
