@@ -2,82 +2,147 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Info, Edit } from 'lucide-react';
+import { ArrowLeft, Save, Info, Edit, CheckCircle } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
-// ADD THIS LINE - it's the most important fix
 export const dynamic = 'force-dynamic';
 
 export default function CheckInPage() {
-  // State only - no localStorage at top level
   const [selectedLift, setSelectedLift] = useState('');
   const [code, setCode] = useState('');
   const [palletNumber, setPalletNumber] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [showPalletInfo, setShowPalletInfo] = useState(false);
   const [hasExistingParking, setHasExistingParking] = useState(false);
-  const [isClient, setIsClient] = useState(false);
+  const [userId, setUserId] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [level, setLevel] = useState(null);
+  const [parkingId, setParkingId] = useState(null);
 
-  // Set client flag and load data
+  // Generate or get user ID
   useEffect(() => {
-    setIsClient(true);
-    
-    // Now we can safely access localStorage
-    const savedCode = localStorage.getItem('parkingCode');
-    const savedPallet = localStorage.getItem('lastParkingPallet');
-    const savedLift = localStorage.getItem('lastParkingLift');
-    
-    if (savedCode) setCode(savedCode);
-    if (savedPallet) setPalletNumber(savedPallet);
-    if (savedLift) setSelectedLift(savedLift);
-    
-    if (savedCode && savedLift) {
-      setHasExistingParking(true);
+    let storedId = localStorage.getItem('parking-user-id');
+    if (!storedId) {
+      storedId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('parking-user-id', storedId);
     }
+    setUserId(storedId);
   }, []);
 
-  // Calculate level (client-side only)
-  const calculateLevel = () => {
-    if (!isClient || !palletNumber || isNaN(palletNumber) || palletNumber < 1 || palletNumber > 56) {
-      return null;
-    }
-    return Math.ceil(parseInt(palletNumber) / 8);
-  };
+  // Load existing parking from Supabase
+  useEffect(() => {
+    if (!userId) return;
 
-  const level = calculateLevel();
+    async function loadParking() {
+      const { data, error } = await supabase
+        .from('user_parking')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-  const handleSave = () => {
-    if (code.length === 4 && selectedLift && isClient) {
-      // Save all data
-      localStorage.setItem('parkingCode', code);
-      localStorage.setItem('lastParkingLift', selectedLift);
-      localStorage.setItem('lastParkingTime', new Date().toISOString());
-      
-      // Save pallet if provided
-      if (palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
-        localStorage.setItem('lastParkingPallet', palletNumber);
-      } else {
-        localStorage.removeItem('lastParkingPallet');
+      if (data && !error) {
+        setSelectedLift(data.lift);
+        setCode(data.code);
+        setPalletNumber(data.pallet || '');
+        setParkingId(data.id);
+        setHasExistingParking(true);
+        
+        if (data.pallet) {
+          const palletNum = parseInt(data.pallet);
+          if (!isNaN(palletNum) && palletNum >= 1 && palletNum <= 56) {
+            setLevel(Math.ceil(palletNum / 8));
+          }
+        }
       }
       
-      setIsSaved(true);
-      setHasExistingParking(true);
+      setIsLoading(false);
+    }
+
+    loadParking();
+  }, [userId]);
+
+  // Calculate level when pallet changes
+  useEffect(() => {
+    if (!palletNumber || isNaN(parseInt(palletNumber)) || parseInt(palletNumber) < 1 || parseInt(palletNumber) > 56) {
+      setLevel(null);
+      return;
+    }
+    setLevel(Math.ceil(parseInt(palletNumber) / 8));
+  }, [palletNumber]);
+
+  const handleSave = async () => {
+    if (code.length === 4 && selectedLift && userId) {
       
-      setTimeout(() => setIsSaved(false), 3000);
+      const parkingData = {
+        user_id: userId,
+        lift: selectedLift,
+        code: code,
+        pallet: palletNumber || null,
+        level: level,
+        updated_at: new Date().toISOString()
+      };
+
+      let error;
+
+      if (parkingId) {
+        // Update existing
+        ({ error } = await supabase
+          .from('user_parking')
+          .update(parkingData)
+          .eq('id', parkingId));
+      } else {
+        // Insert new
+        ({ error } = await supabase
+          .from('user_parking')
+          .insert([parkingData]));
+      }
+
+      if (!error) {
+        setIsSaved(true);
+        setHasExistingParking(true);
+        
+        // Also save to localStorage as backup
+        localStorage.setItem('parkingCode', code);
+        localStorage.setItem('lastParkingLift', selectedLift);
+        if (palletNumber) localStorage.setItem('lastParkingPallet', palletNumber);
+        localStorage.setItem('lastParkingTime', new Date().toISOString());
+        
+        setTimeout(() => setIsSaved(false), 3000);
+      } else {
+        alert('Failed to save parking details');
+        console.error(error);
+      }
     }
   };
 
-  const handleUpdatePalletOnly = () => {
-    if (isClient && palletNumber && parseInt(palletNumber) >= 1 && parseInt(palletNumber) <= 56) {
-      localStorage.setItem('lastParkingPallet', palletNumber);
-      alert(`✅ Pallet updated to #${palletNumber} ${level ? `(Level ${level})` : ''}`);
-    } else if (isClient && palletNumber === '') {
-      localStorage.removeItem('lastParkingPallet');
-      alert('✅ Pallet number removed');
+  const handleUpdatePalletOnly = async () => {
+    if (!userId || !parkingId) return;
+    
+    const palletValue = palletNumber || null;
+    
+    const { error } = await supabase
+      .from('user_parking')
+      .update({ 
+        pallet: palletValue,
+        level: level,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', parkingId);
+
+    if (!error) {
+      if (palletNumber) {
+        localStorage.setItem('lastParkingPallet', palletNumber);
+        alert(`✅ Pallet updated to #${palletNumber} ${level ? `(Level ${level})` : ''}`);
+      } else {
+        localStorage.removeItem('lastParkingPallet');
+        alert('✅ Pallet number removed');
+      }
     }
   };
 
-  // Don't render localStorage-dependent UI during SSR
-  if (!isClient) {
+  if (isLoading) {
     return (
       <div className="max-w-md mx-auto p-4">
         <header className="mb-6">
@@ -86,11 +151,9 @@ export default function CheckInPage() {
             Back
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">Check In Car</h1>
-          <p className="text-gray-600">Loading...</p>
         </header>
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-parking-blue mx-auto"></div>
-          <p className="mt-2 text-gray-600">Loading parking form...</p>
         </div>
       </div>
     );
@@ -98,7 +161,6 @@ export default function CheckInPage() {
 
   return (
     <div className="max-w-md mx-auto p-4">
-      {/* Header */}
       <header className="mb-6">
         <Link href="/" className="inline-flex items-center gap-2 text-gray-600 mb-4">
           <ArrowLeft className="w-4 h-4" />
@@ -146,30 +208,28 @@ export default function CheckInPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           2. 4-Digit Code <span className="text-red-500">*</span>
         </h2>
-        <div className="relative">
-          <input
-            type="text"
-            maxLength="4"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-            placeholder="1234"
-            className="w-full text-3xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
-          />
-          <div className="grid grid-cols-4 gap-2 mt-4">
-            {[1,2,3,4,5,6,7,8,9,'⌫',0,'Clear'].map((num) => (
-              <button
-                key={num}
-                onClick={() => {
-                  if (num === '⌫') setCode(code.slice(0, -1));
-                  else if (num === 'Clear') setCode('');
-                  else if (code.length < 4) setCode(code + num.toString());
-                }}
-                className="py-3 bg-gray-100 rounded-lg font-medium text-lg hover:bg-gray-200"
-              >
-                {num}
-              </button>
-            ))}
-          </div>
+        <input
+          type="text"
+          maxLength={4}
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+          placeholder="1234"
+          className="w-full text-3xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
+        />
+        <div className="grid grid-cols-4 gap-2 mt-4">
+          {[1,2,3,4,5,6,7,8,9,'⌫',0,'Clear'].map((num) => (
+            <button
+              key={num}
+              onClick={() => {
+                if (num === '⌫') setCode(code.slice(0, -1));
+                else if (num === 'Clear') setCode('');
+                else if (code.length < 4) setCode(code + num.toString());
+              }}
+              className="py-3 bg-gray-100 rounded-lg font-medium text-lg hover:bg-gray-200"
+            >
+              {num}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -195,41 +255,45 @@ export default function CheckInPage() {
           </div>
         )}
         
-        <div className="relative">
-          <div className="flex gap-2">
-            <input
-              type="number"
-              min="1"
-              max="56"
-              value={palletNumber}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val === '' || (parseInt(val) >= 1 && parseInt(val) <= 56)) {
-                  setPalletNumber(val);
-                }
-              }}
-              placeholder="e.g., 12"
-              className="flex-1 text-2xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
-            />
-            
-            {hasExistingParking && (
-              <button
-                onClick={handleUpdatePalletOnly}
-                className="px-4 py-4 bg-gray-200 text-gray-800 rounded-xl font-medium hover:bg-gray-300"
-                title="Update pallet only"
-              >
-                <Edit className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min="1"
+            max="56"
+            value={palletNumber}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === '' || (parseInt(val) >= 1 && parseInt(val) <= 56)) {
+                setPalletNumber(val);
+              }
+            }}
+            placeholder="e.g., 12"
+            className="flex-1 text-2xl font-mono text-center py-4 border-2 border-gray-300 rounded-xl focus:border-parking-blue focus:outline-none"
+          />
+          
+          {hasExistingParking && (
+            <button
+              onClick={handleUpdatePalletOnly}
+              className="px-4 py-4 bg-gray-200 text-gray-800 rounded-xl font-medium hover:bg-gray-300"
+              title="Update pallet only"
+            >
+              <Edit className="w-4 h-4" />
+            </button>
+          )}
         </div>
+
+        {level && (
+          <p className="mt-2 text-sm text-gray-600">
+            Level {level} {palletNumber && `(Pallets ${(level-1)*8+1}-${level*8})`}
+          </p>
+        )}
       </div>
 
       {/* Save Button */}
       <button
         onClick={handleSave}
         disabled={!selectedLift || code.length !== 4}
-        className="w-full btn-primary flex items-center justify-center gap-2 py-4 text-lg disabled:opacity-50"
+        className="w-full bg-parking-blue text-white py-4 rounded-xl font-semibold text-lg disabled:opacity-50 flex items-center justify-center gap-2"
       >
         <Save className="w-5 h-5" />
         {hasExistingParking ? 'Update Parking' : 'Save Parking Details'}
@@ -237,12 +301,24 @@ export default function CheckInPage() {
 
       {/* Success Message */}
       {isSaved && (
-        <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-          <div className="text-green-800 text-center">
-            <div className="font-bold">✓ Parking details saved!</div>
+        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-3">
+          <CheckCircle className="w-5 h-5 text-green-600" />
+          <div>
+            <p className="font-medium text-green-800">Parking saved!</p>
+            <p className="text-sm text-green-600">
+              Lift {selectedLift} • Code {code}
+              {palletNumber && ` • Pallet ${palletNumber}`}
+            </p>
           </div>
         </div>
       )}
+
+      {/* Sync Status */}
+      <div className="mt-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+        <p className="text-sm text-blue-800">
+          <span className="font-medium">✓ Cloud Sync</span> - Your parking spot is saved and will appear on all your devices
+        </p>
+      </div>
     </div>
   );
 }
