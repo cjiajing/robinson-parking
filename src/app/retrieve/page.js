@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Car, Clock, Users, Bell } from 'lucide-react';
-import { supabase } from '../lib/supabase';  // ← Relative import, no @ symbol
+import { supabase } from '@/lib/supabase';  // ✅ This works now!
 
 export const dynamic = 'force-dynamic';
 
