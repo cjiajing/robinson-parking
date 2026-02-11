@@ -6,11 +6,11 @@ import { ArrowLeft, Users, Clock, AlertCircle } from 'lucide-react';
 
 export default function RetrievePage() {
   const [selectedLift, setSelectedLift] = useState('');
-  const [queueA, setQueueA] = useState(2);
+  const [queueA, setQueueA] = useState(0);
   const [queueB, setQueueB] = useState(0);
   const [userInQueue, setUserInQueue] = useState(false);
   const [queuePosition, setQueuePosition] = useState(null);
-  const [estimatedTime, setEstimatedTime] = useState({ A: 6, B: 0 });
+  const [estimatedTime, setEstimatedTime] = useState({ A: 0, B: 0 });
   const [userCode, setUserCode] = useState('____'); // Default value
 
   // Load user's code from localStorage - SAFELY
