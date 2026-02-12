@@ -262,13 +262,21 @@ export default function RetrieveCarPage() {
       setUserVerificationCount(newCount);
       localStorage.setItem('user-verifications', newCount.toString());
       
+      // CLOSE POPUP IMMEDIATELY
       setShowPositionVerifier(false);
       setJustJoinedLift('');
       
-      // Show success message
-      alert(`✅ Verified! You are #${position} in queue. Thanks for helping!`);
+      // Show brief success message (toast style)
+      const toast = document.createElement('div');
+      toast.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium animate-fade-in-down z-50';
+      toast.textContent = `✅ Verified! You are #${position} in queue`;
+      document.body.appendChild(toast);
       
-      // Reload to show updated queue
+      setTimeout(() => {
+        toast.remove();
+      }, 3000);
+      
+      // Reload queue data
       loadQueueData();
     }
   };
@@ -581,14 +589,14 @@ export default function RetrieveCarPage() {
             </div>
             
             <h3 className="font-bold text-lg text-center mb-2">
-              ✅ You joined the queue!
+              ✅ You're in line!
             </h3>
             
             <p className="text-sm text-gray-600 text-center mb-1">
-              You're at Lift {justJoinedLift || selectedLift}.
+              Lift {justJoinedLift || selectedLift}
             </p>
             <p className="text-sm font-medium text-gray-900 text-center mb-4">
-              What position are you in?
+              Tap your position in the queue
             </p>
             
             <div className="grid grid-cols-4 gap-2 mb-4">
@@ -596,7 +604,7 @@ export default function RetrieveCarPage() {
                 <button
                   key={num}
                   onClick={() => handleVerifyPosition(num)}
-                  className="py-3 border-2 border-gray-200 rounded-xl hover:border-parking-blue hover:bg-blue-50 font-bold text-lg transition-all"
+                  className="py-4 border-2 border-gray-200 rounded-xl hover:border-parking-blue hover:bg-blue-50 font-bold text-lg transition-all active:bg-parking-blue active:text-white"
                 >
                   #{num}
                 </button>
@@ -608,13 +616,13 @@ export default function RetrieveCarPage() {
                 setShowPositionVerifier(false);
                 setJustJoinedLift('');
               }}
-              className="w-full py-2 text-gray-400 text-sm hover:text-gray-600"
+              className="w-full py-3 text-gray-500 text-sm font-medium hover:text-gray-700"
             >
-              Skip for now
+              Not sure? Skip
             </button>
             
             <p className="text-xs text-gray-400 text-center mt-4">
-              🫶 Verifying your position helps {queueLength} people know the real wait time
+              👆 Tap a number above to verify
             </p>
           </div>
         </div>
