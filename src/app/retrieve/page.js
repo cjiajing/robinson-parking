@@ -2,7 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Car, Clock, Users, Bell, Loader, MapPin, Info } from 'lucide-react';
+import { 
+  ArrowLeft, Car, Clock, Users, Bell, Loader, 
+  MapPin, Info, CheckCircle, HelpCircle, X, Crown 
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
@@ -12,14 +15,21 @@ export default function RetrieveCarPage() {
   const [queuePosition, setQueuePosition] = useState(null);
   const [isInQueue, setIsInQueue] = useState(false);
   const [queueLength, setQueueLength] = useState(0);
+  const [verifiedQueue, setVerifiedQueue] = useState(null);
+  const [verifiedQueueTime, setVerifiedQueueTime] = useState(null);
   const [userId, setUserId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [queueData, setQueueData] = useState([]);
-  
-  // Parking details from check-in
   const [parkingDetails, setParkingDetails] = useState(null);
+  
+  // Queue verification state
+  const [showPositionVerifier, setShowPositionVerifier] = useState(false);
+  const [showManualVerifier, setShowManualVerifier] = useState(false);
+  const [userVerificationCount, setUserVerificationCount] = useState(0);
+  const [recentVerifications, setRecentVerifications] = useState([]);
+  const [justJoinedLift, setJustJoinedLift] = useState('');
 
-  // Generate or get user ID and load parking details
+  // Generate or get user ID
   useEffect(() => {
     let storedId = localStorage.getItem('parking-user-id');
     if (!storedId) {
@@ -28,7 +38,13 @@ export default function RetrieveCarPage() {
     }
     setUserId(storedId);
     
-    // Load parking details from localStorage first (fast)
+    // Load user's verification count
+    const verifications = localStorage.getItem('user-verifications');
+    if (verifications) {
+      setUserVerificationCount(parseInt(verifications));
+    }
+    
+    // Load parking details from localStorage
     const savedLift = localStorage.getItem('lastParkingLift');
     const savedCode = localStorage.getItem('parkingCode');
     const savedPallet = localStorage.getItem('lastParkingPallet');
@@ -44,7 +60,7 @@ export default function RetrieveCarPage() {
     }
   }, []);
 
-  // Load parking details from Supabase (more accurate)
+  // Load parking details from Supabase
   useEffect(() => {
     if (!userId) return;
 
@@ -65,7 +81,6 @@ export default function RetrieveCarPage() {
           level: data.level
         });
         
-        // Auto-select the lift from parking
         if (data.lift) {
           setSelectedLift(data.lift);
         }
@@ -75,10 +90,11 @@ export default function RetrieveCarPage() {
     loadParkingDetails();
   }, [userId]);
 
-  // Load queue data from Supabase
+  // Load queue data and verifications
   const loadQueueData = async () => {
     if (!selectedLift) return;
 
+    // Load digital queue
     const { data, error } = await supabase
       .from('parking_queue')
       .select('*')
@@ -94,7 +110,40 @@ export default function RetrieveCarPage() {
     setQueueData(data || []);
     setQueueLength(data?.length || 0);
 
-    // Check if current user is in queue
+    // Load recent verifications (last 10 minutes)
+    const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    
+    const { data: verifications, error: verifError } = await supabase
+      .from('queue_verifications')
+      .select('*')
+      .eq('lift', selectedLift)
+      .gte('created_at', tenMinsAgo)
+      .order('created_at', { ascending: false });
+
+    if (!verifError && verifications) {
+      setRecentVerifications(verifications);
+      
+      // Calculate weighted average (more recent = higher weight)
+      if (verifications.length > 0) {
+        let totalWeight = 0;
+        let weightedSum = 0;
+        
+        verifications.forEach((v, index) => {
+          const weight = verifications.length - index;
+          weightedSum += v.count * weight;
+          totalWeight += weight;
+        });
+        
+        const avgCount = Math.round(weightedSum / totalWeight);
+        setVerifiedQueue(avgCount);
+        setVerifiedQueueTime(new Date(verifications[0].created_at));
+      } else {
+        setVerifiedQueue(null);
+        setVerifiedQueueTime(null);
+      }
+    }
+
+    // Check if user is in queue
     const userEntry = data?.find(item => item.user_id === userId);
     if (userEntry) {
       const position = data.findIndex(item => item.user_id === userId) + 1;
@@ -108,7 +157,7 @@ export default function RetrieveCarPage() {
     setIsLoading(false);
   };
 
-  // Initial load and real-time subscription
+  // Real-time subscription
   useEffect(() => {
     if (!userId || !selectedLift) {
       setIsLoading(false);
@@ -131,6 +180,18 @@ export default function RetrieveCarPage() {
           loadQueueData();
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'queue_verifications',
+          filter: `lift=eq.${selectedLift}`
+        },
+        () => {
+          loadQueueData();
+        }
+      )
       .subscribe();
 
     return () => {
@@ -141,6 +202,7 @@ export default function RetrieveCarPage() {
   const handleJoinQueue = async () => {
     if (!selectedLift || !userId) return;
 
+    // Check if already in queue
     const { data: existing } = await supabase
       .from('parking_queue')
       .select('*')
@@ -153,6 +215,7 @@ export default function RetrieveCarPage() {
       return;
     }
 
+    // Join queue
     const { error } = await supabase
       .from('parking_queue')
       .insert([
@@ -167,7 +230,72 @@ export default function RetrieveCarPage() {
       console.error('Error joining queue:', error);
       alert('Failed to join queue. Please try again.');
     } else {
-      alert(`✅ Joined queue for Lift ${selectedLift}`);
+      // Store which lift they joined
+      setJustJoinedLift(selectedLift);
+      // Show position verifier immediately
+      setShowPositionVerifier(true);
+    }
+  };
+
+  const handleVerifyPosition = async (position) => {
+    // Calculate queue stats
+    const peopleAhead = position - 1;
+    const totalQueue = position; // Since user is including themselves
+    
+    const verification = {
+      lift: justJoinedLift || selectedLift,
+      count: totalQueue,
+      user_id: userId,
+      created_at: new Date().toISOString(),
+      verified_position: position,
+      people_ahead: peopleAhead,
+      type: 'join_verification'
+    };
+    
+    const { error } = await supabase
+      .from('queue_verifications')
+      .insert([verification]);
+      
+    if (!error) {
+      // Increment user's verification count
+      const newCount = userVerificationCount + 1;
+      setUserVerificationCount(newCount);
+      localStorage.setItem('user-verifications', newCount.toString());
+      
+      setShowPositionVerifier(false);
+      setJustJoinedLift('');
+      
+      // Show success message
+      alert(`✅ Verified! You are #${position} in queue. Thanks for helping!`);
+      
+      // Reload to show updated queue
+      loadQueueData();
+    }
+  };
+
+  const handleManualVerify = async (count) => {
+    if (!selectedLift) return;
+    
+    const verification = {
+      lift: selectedLift,
+      count: count,
+      user_id: userId,
+      created_at: new Date().toISOString(),
+      type: 'manual_verification'
+    };
+    
+    const { error } = await supabase
+      .from('queue_verifications')
+      .insert([verification]);
+      
+    if (!error) {
+      const newCount = userVerificationCount + 1;
+      setUserVerificationCount(newCount);
+      localStorage.setItem('user-verifications', newCount.toString());
+      
+      alert(`✅ Queue updated to ${count} people. Thanks for helping!`);
+      setShowManualVerifier(false);
+      loadQueueData();
     }
   };
 
@@ -208,15 +336,32 @@ export default function RetrieveCarPage() {
       alert('Failed to update status.');
     } else {
       alert('✅ Car retrieved successfully!');
+      
+      // Clear parking record
+      localStorage.removeItem('parkingCode');
+      localStorage.removeItem('lastParkingLift');
+      localStorage.removeItem('lastParkingPallet');
+      localStorage.removeItem('lastParkingTime');
+      
+      setParkingDetails(null);
+      setSelectedLift('');
     }
   };
 
-  const calculateWaitTime = () => {
-    if (!queuePosition) return 'N/A';
-    const minutes = (queuePosition - 1) * 5;
-    if (minutes === 0) return 'Ready now';
+  const calculateWaitTime = (queueCount) => {
+    if (!queueCount) return 'N/A';
+    const minutes = (queueCount - (queuePosition || 0)) * 5;
+    if (minutes <= 0) return 'Ready now';
     if (minutes < 60) return `${minutes} minutes`;
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  };
+
+  const formatTimeAgo = (date) => {
+    const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+    
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    return `${Math.floor(seconds / 3600)}h ago`;
   };
 
   if (isLoading) {
@@ -231,7 +376,7 @@ export default function RetrieveCarPage() {
         </header>
         <div className="text-center py-12">
           <Loader className="w-8 h-8 animate-spin text-parking-blue mx-auto" />
-          <p className="mt-2 text-gray-600">Loading your parking details...</p>
+          <p className="mt-2 text-gray-600">Loading queue information...</p>
         </div>
       </div>
     );
@@ -245,10 +390,10 @@ export default function RetrieveCarPage() {
           Back
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">Retrieve Car</h1>
-        <p className="text-gray-600">Join queue to retrieve your vehicle</p>
+        <p className="text-gray-600">Join queue and verify your position to help others</p>
       </header>
 
-      {/* Parking Details Card - Show where user parked */}
+      {/* Parking Details Card */}
       {parkingDetails && (
         <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
           <div className="flex items-start gap-3">
@@ -278,27 +423,22 @@ export default function RetrieveCarPage() {
                   </p>
                 )}
               </div>
-              <Link 
-                href="/checkin" 
-                className="inline-block mt-3 text-xs text-parking-blue hover:underline"
-              >
-                Update parking location →
-              </Link>
             </div>
           </div>
         </div>
       )}
 
-      {/* Lift Selection - Auto-selected but can change */}
-      <div className="mb-8">
+      {/* Lift Selection */}
+      <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">
-            1. Select Lift <span className="text-red-500">*</span>
+            Select Lift
           </h2>
-          {parkingDetails && (
-            <span className="text-xs bg-gray-100 px-2 py-1 rounded-full text-gray-600">
-              Auto-selected from parking
-            </span>
+          {userVerificationCount > 0 && (
+            <div className="flex items-center gap-1 text-xs bg-amber-50 text-amber-700 px-2 py-1 rounded-full">
+              <Crown className="w-3 h-3" />
+              <span>Helped {userVerificationCount} times</span>
+            </div>
           )}
         </div>
         <div className="flex gap-4">
@@ -323,37 +463,52 @@ export default function RetrieveCarPage() {
             Lift B
           </button>
         </div>
-        {parkingDetails && parkingDetails.lift !== selectedLift && (
-          <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
-            <Info className="w-3 h-3" />
-            You parked at Lift {parkingDetails.lift}. Are you sure?
-          </p>
-        )}
       </div>
 
-      {/* Queue Info */}
       {selectedLift && (
-        <div className="mb-8">
-          {/* Queue Length Card */}
-          <div className="bg-gray-50 rounded-xl p-4 mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-gray-600" />
-                <span className="font-medium">Current Queue</span>
+        <>
+          {/* Queue Comparison Cards */}
+          <div className="mb-6">
+            <div className="flex gap-3">
+              {/* Digital Queue */}
+              <div className="flex-1 bg-blue-50 rounded-xl p-4 border border-blue-200">
+                <p className="text-xs text-blue-600 font-medium mb-1 flex items-center gap-1">
+                  <Users className="w-3 h-3" />
+                  DIGITAL QUEUE
+                </p>
+                <p className="text-3xl font-bold text-blue-700">{queueLength}</p>
+                <p className="text-xs text-blue-600 mt-1">
+                  Joined via app
+                </p>
               </div>
-              <span className="text-2xl font-bold text-parking-blue">{queueLength}</span>
+              
+              {/* Verified Queue */}
+              <div className="flex-1 bg-green-50 rounded-xl p-4 border border-green-200">
+                <p className="text-xs text-green-600 font-medium mb-1 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3" />
+                  VERIFIED QUEUE
+                </p>
+                <p className="text-3xl font-bold text-green-700">
+                  {verifiedQueue !== null ? verifiedQueue : '?'}
+                </p>
+                <p className="text-xs text-green-600 mt-1">
+                  {verifiedQueueTime 
+                    ? `${formatTimeAgo(verifiedQueueTime)}`
+                    : 'No reports'}
+                </p>
+              </div>
             </div>
-            <p className="text-sm text-gray-600">
-              {queueLength === 0 
-                ? '✨ No one in queue - you can retrieve immediately!' 
-                : `${queueLength} car${queueLength > 1 ? 's' : ''} waiting`
-              }
-            </p>
+            
+            {recentVerifications.length > 0 && (
+              <p className="text-xs text-gray-500 text-center mt-2">
+                🫶 {recentVerifications.length} people verified • Last {verifiedQueueTime ? formatTimeAgo(verifiedQueueTime) : 'N/A'}
+              </p>
+            )}
           </div>
 
-          {/* User's Queue Status */}
+          {/* Join Queue Button or Queue Status */}
           {isInQueue ? (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
+            <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <Clock className="w-5 h-5 text-green-600" />
@@ -364,19 +519,19 @@ export default function RetrieveCarPage() {
               <p className="text-sm text-green-700 mb-3">
                 {queuePosition === 1 
                   ? '🎯 You are next! Please proceed to the lift.'
-                  : `Estimated wait: ${calculateWaitTime()}`
+                  : `Estimate: ${calculateWaitTime(verifiedQueue || queueLength)}`
                 }
               </p>
               <div className="flex gap-2">
                 <button
                   onClick={handleLeaveQueue}
-                  className="flex-1 py-3 bg-red-100 text-red-700 rounded-lg font-medium hover:bg-red-200 transition-colors"
+                  className="flex-1 py-3 bg-red-100 text-red-700 rounded-lg font-medium hover:bg-red-200"
                 >
                   Leave Queue
                 </button>
                 <button
                   onClick={handleCarRetrieved}
-                  className="flex-1 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+                  className="flex-1 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
                 >
                   ✓ Car Retrieved
                 </button>
@@ -385,29 +540,122 @@ export default function RetrieveCarPage() {
           ) : (
             <button
               onClick={handleJoinQueue}
-              className="w-full py-4 bg-parking-blue text-white rounded-xl font-semibold text-lg hover:bg-parking-blue/90 transition-colors flex items-center justify-center gap-2"
+              className="w-full py-4 bg-parking-blue text-white rounded-xl font-semibold text-lg hover:bg-parking-blue/90 mb-4 flex items-center justify-center gap-2"
             >
               <Car className="w-5 h-5" />
-              Join Queue for Lift {selectedLift}
+              Join Queue & Verify Position
             </button>
           )}
-        </div>
-      )}
 
-      {/* Quick Reminder */}
-      {!parkingDetails && (
-        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
-          <div className="flex items-start gap-2">
-            <Info className="w-5 h-5 text-yellow-600 mt-0.5" />
-            <div>
-              <p className="text-sm text-yellow-800 font-medium">No parking record found</p>
-              <p className="text-xs text-yellow-700 mt-1">
-                Have you checked in?{' '}
-                <Link href="/checkin" className="font-medium underline">
+          {/* Manual Verification Button (for people already in queue) */}
+          {!isInQueue && (
+            <button
+              onClick={() => setShowManualVerifier(true)}
+              className="w-full py-3 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 mb-6 flex items-center justify-center gap-2"
+            >
+              <HelpCircle className="w-4 h-4" />
+              I'm at the lift lobby • Update queue count
+            </button>
+          )}
+
+          {/* No Parking Record Warning */}
+          {!parkingDetails && (
+            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
+              <p className="text-sm text-yellow-800">
+                ℹ️ No parking record found. 
+                <Link href="/checkin" className="font-medium underline ml-1">
                   Check in your car first
                 </Link>
               </p>
             </div>
+          )}
+        </>
+      )}
+
+      {/* Position Verifier Modal - Shows immediately after joining queue */}
+      {showPositionVerifier && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full animate-fade-in">
+            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle className="w-6 h-6 text-green-600" />
+            </div>
+            
+            <h3 className="font-bold text-lg text-center mb-2">
+              ✅ You joined the queue!
+            </h3>
+            
+            <p className="text-sm text-gray-600 text-center mb-1">
+              You're at Lift {justJoinedLift || selectedLift}.
+            </p>
+            <p className="text-sm font-medium text-gray-900 text-center mb-4">
+              What position are you in?
+            </p>
+            
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              {[1,2,3,4,5,6,7,8].map(num => (
+                <button
+                  key={num}
+                  onClick={() => handleVerifyPosition(num)}
+                  className="py-3 border-2 border-gray-200 rounded-xl hover:border-parking-blue hover:bg-blue-50 font-bold text-lg transition-all"
+                >
+                  #{num}
+                </button>
+              ))}
+            </div>
+            
+            <button
+              onClick={() => {
+                setShowPositionVerifier(false);
+                setJustJoinedLift('');
+              }}
+              className="w-full py-2 text-gray-400 text-sm hover:text-gray-600"
+            >
+              Skip for now
+            </button>
+            
+            <p className="text-xs text-gray-400 text-center mt-4">
+              🫶 Verifying your position helps {queueLength} people know the real wait time
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Verifier Modal */}
+      {showManualVerifier && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg">How many people are waiting?</h3>
+              <button
+                onClick={() => setShowManualVerifier(false)}
+                className="p-1 hover:bg-gray-100 rounded-full"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              Lift {selectedLift} • Your update helps the community
+            </p>
+            
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[1,2,3,4,5,6,7,8,9,10,11,12].map(num => (
+                <button
+                  key={num}
+                  onClick={() => handleManualVerify(num)}
+                  className="py-3 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium"
+                >
+                  {num}
+                </button>
+              ))}
+            </div>
+            
+            <button
+              onClick={() => setShowManualVerifier(false)}
+              className="w-full py-2 text-gray-500 text-sm"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -417,9 +665,9 @@ export default function RetrieveCarPage() {
         <div className="flex items-start gap-2">
           <Bell className="w-5 h-5 text-blue-600 mt-0.5" />
           <div>
-            <p className="text-sm text-blue-800 font-medium">Live Queue Updates</p>
+            <p className="text-sm text-blue-800 font-medium">Community-Powered Queue</p>
             <p className="text-xs text-blue-600">
-              Queue updates in real-time. Your position will refresh automatically.
+              Digital: {queueLength} • Verified: {verifiedQueue || '?'} • {recentVerifications.length} verifications
             </p>
           </div>
         </div>
