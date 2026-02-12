@@ -238,57 +238,50 @@ export default function RetrieveCarPage() {
   };
 
   const handleVerifyPosition = async (position) => {
-    // 1. CLOSE POPUP IMMEDIATELY
     setShowPositionVerifier(false);
     setJustJoinedLift('');
     
     try {
       console.log('=== VERIFY POSITION START ===');
       console.log('Requested position:', position);
-      console.log('Lift:', selectedLift);
-      console.log('User ID:', userId);
       
-      // 2. Get current queue
-      const { data: queueData, error: fetchError } = await supabase
+      // Get current queue
+      const { data: queueData } = await supabase
         .from('parking_queue')
         .select('*')
         .eq('lift', selectedLift)
         .eq('status', 'waiting')
         .order('created_at', { ascending: true });
       
-      if (fetchError) throw fetchError;
+      console.log('Current queue length:', queueData.length);
       
-      console.log('Current queue before update:');
-      queueData.forEach((user, index) => {
-        console.log(`#${index + 1}: ${user.user_id.slice(-4)} - ${user.created_at}`);
-      });
-      
-      // 3. Find current user position
-      const userIndex = queueData.findIndex(item => item.user_id === userId);
-      console.log('Current user position:', userIndex + 1);
-      console.log('Requested position:', position);
-      
-      // 4. Calculate timestamp
+      // CALCULATE TIMESTAMP BASED ON REALITY
       let targetTime;
       
-      if (position === 1) {
+      // CASE 1: Queue is empty
+      if (queueData.length === 0) {
+        // You're the first person - you ARE #1
+        targetTime = new Date('2024-01-01T00:00:00Z');
+        console.log('Queue empty, setting as #1');
+      }
+      // CASE 2: You want to be #1
+      else if (position === 1) {
         targetTime = new Date('2024-01-01T00:00:00Z');
         console.log('Setting as #1');
-      } 
-      else if (position > queueData.length) {
-        targetTime = new Date();
-        console.log('Setting as last position');
       }
+      // CASE 3: You want position beyond current queue length
+      else if (position > queueData.length) {
+        // You're actually at the end of the queue
+        targetTime = new Date();
+        console.log('Position > queue length, setting as last position');
+      }
+      // CASE 4: Normal case - insert at specific position
       else {
         // Get the person who should be ahead of you
         const personAhead = queueData[position - 2];
-        console.log('Person ahead:', personAhead?.user_id.slice(-4));
-        console.log('Person ahead time:', personAhead?.created_at);
-        
         if (personAhead) {
-          // Set time to 1 second after person ahead
           targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-          console.log('Setting time to 1 second after person ahead');
+          console.log(`Setting position #${position} (after ${personAhead.user_id.slice(-4)})`);
         } else {
           targetTime = new Date('2024-01-01T00:00:00Z');
           console.log('No person ahead, setting as #1');
@@ -297,8 +290,8 @@ export default function RetrieveCarPage() {
       
       console.log('Target time:', targetTime.toISOString());
       
-      // 5. Update user's position
-      const { error: updateError } = await supabase
+      // Update user's position
+      const { error } = await supabase
         .from('parking_queue')
         .update({ 
           created_at: targetTime.toISOString()
@@ -306,46 +299,33 @@ export default function RetrieveCarPage() {
         .eq('user_id', userId)
         .eq('status', 'waiting');
       
-      if (updateError) throw updateError;
-      console.log('Update successful');
+      if (error) throw error;
       
-      // 6. Record verification
+      // Record verification
       await supabase.from('queue_verifications').insert([{
         lift: selectedLift,
-        count: position,
+        count: queueData.length + 1, // Actual queue length after you join
         user_id: userId,
-        verified_position: position,
+        verified_position: Math.min(position, queueData.length + 1), // Can't exceed actual queue
         created_at: new Date().toISOString()
       }]);
       
-      // 7. Update helper count
+      // Update helper count
       const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
       localStorage.setItem('user-verifications', newCount.toString());
       setUserVerificationCount(newCount);
       
-      // 8. Show success
-      alert(`✅ You are now #${position} in queue`);
+      // Show appropriate message
+      if (queueData.length === 0) {
+        alert(`✅ You are #1 in queue`);
+      } else if (position > queueData.length) {
+        alert(`✅ You are #${queueData.length + 1} in queue`);
+      } else {
+        alert(`✅ You are now #${position} in queue`);
+      }
       
-      // 9. Reload queue
-      await loadQueueData();
-      
-      // 10. Check new position
-      const { data: newQueue } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
-      
-      console.log('Queue after update:');
-      newQueue.forEach((user, index) => {
-        console.log(`#${index + 1}: ${user.user_id.slice(-4)} - ${user.created_at}`);
-        if (user.user_id === userId) {
-          console.log(`✅ USER NOW AT POSITION #${index + 1}`);
-        }
-      });
-      
-      console.log('=== VERIFY POSITION END ===');
+      // Reload queue
+      loadQueueData();
       
     } catch (error) {
       console.error('Error:', error);
