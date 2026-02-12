@@ -238,44 +238,55 @@ export default function RetrieveCarPage() {
   };
 
   const handleVerifyPosition = async (position) => {
-    // CLOSE POPUP IMMEDIATELY - do this first!
+    // 1. Close popup
     setShowPositionVerifier(false);
-    setJustJoinedLift('');
     
-    // Calculate queue stats
-    const peopleAhead = position - 1;
-    const totalQueue = position;
+    // 2. Get user's current position in digital queue
+    const { data: queueData } = await supabase
+      .from('parking_queue')
+      .select('*')
+      .eq('lift', selectedLift)
+      .eq('status', 'waiting')
+      .order('created_at', { ascending: true });
     
-    try {
-      const verification = {
-        lift: selectedLift, // Use selectedLift directly instead of justJoinedLift
-        count: totalQueue,
-        user_id: userId,
-        created_at: new Date().toISOString(),
-        verified_position: position,
-        people_ahead: peopleAhead,
-        type: 'join_verification'
-      };
+    const userIndex = queueData.findIndex(item => item.user_id === userId);
+    const digitalPosition = userIndex + 1;
+    
+    // 3. Calculate discrepancy
+    const discrepancy = position - digitalPosition;
+    
+    if (discrepancy > 0) {
+      // There are MORE people physically than digitally
+      // We need to add "phantom" queue entries
       
-      const { error } = await supabase
-        .from('queue_verifications')
-        .insert([verification]);
-        
-      if (!error) {
-        // Increment user's verification count
-        const newCount = userVerificationCount + 1;
-        setUserVerificationCount(newCount);
-        localStorage.setItem('user-verifications', newCount.toString());
-        
-        // Show brief success message
-        alert(`✅ Verified! You are #${position} in queue`);
-        
-        // Reload queue data
-        loadQueueData();
+      console.log(`Physical queue has ${discrepancy} more people than digital queue`);
+      
+      // Option: Add placeholder entries for missing people
+      for (let i = 0; i < discrepancy; i++) {
+        await supabase
+          .from('parking_queue')
+          .insert([{
+            user_id: `phantom-${Date.now()}-${i}`,
+            lift: selectedLift,
+            status: 'waiting',
+            is_phantom: true,
+            created_at: new Date().toISOString()
+          }]);
       }
-    } catch (error) {
-      console.error('Error:', error);
     }
+    
+    // 4. Record verification
+    await supabase.from('queue_verifications').insert([{
+      lift: selectedLift,
+      count: position,
+      user_id: userId,
+      verified_position: position,
+      digital_position: digitalPosition,
+      discrepancy: discrepancy
+    }]);
+    
+    // 5. Reload queue
+    loadQueueData();
   };
 
   const handleManualVerify = async (count) => {
