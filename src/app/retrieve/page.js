@@ -238,46 +238,43 @@ export default function RetrieveCarPage() {
   };
 
   const handleVerifyPosition = async (position) => {
+    // CLOSE POPUP IMMEDIATELY - do this first!
+    setShowPositionVerifier(false);
+    setJustJoinedLift('');
+    
     // Calculate queue stats
     const peopleAhead = position - 1;
-    const totalQueue = position; // Since user is including themselves
+    const totalQueue = position;
     
-    const verification = {
-      lift: justJoinedLift || selectedLift,
-      count: totalQueue,
-      user_id: userId,
-      created_at: new Date().toISOString(),
-      verified_position: position,
-      people_ahead: peopleAhead,
-      type: 'join_verification'
-    };
-    
-    const { error } = await supabase
-      .from('queue_verifications')
-      .insert([verification]);
+    try {
+      const verification = {
+        lift: selectedLift, // Use selectedLift directly instead of justJoinedLift
+        count: totalQueue,
+        user_id: userId,
+        created_at: new Date().toISOString(),
+        verified_position: position,
+        people_ahead: peopleAhead,
+        type: 'join_verification'
+      };
       
-    if (!error) {
-      // Increment user's verification count
-      const newCount = userVerificationCount + 1;
-      setUserVerificationCount(newCount);
-      localStorage.setItem('user-verifications', newCount.toString());
-      
-      // CLOSE POPUP IMMEDIATELY
-      setShowPositionVerifier(false);
-      setJustJoinedLift('');
-      
-      // Show brief success message (toast style)
-      const toast = document.createElement('div');
-      toast.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium animate-fade-in-down z-50';
-      toast.textContent = `✅ Verified! You are #${position} in queue`;
-      document.body.appendChild(toast);
-      
-      setTimeout(() => {
-        toast.remove();
-      }, 3000);
-      
-      // Reload queue data
-      loadQueueData();
+      const { error } = await supabase
+        .from('queue_verifications')
+        .insert([verification]);
+        
+      if (!error) {
+        // Increment user's verification count
+        const newCount = userVerificationCount + 1;
+        setUserVerificationCount(newCount);
+        localStorage.setItem('user-verifications', newCount.toString());
+        
+        // Show brief success message
+        alert(`✅ Verified! You are #${position} in queue`);
+        
+        // Reload queue data
+        loadQueueData();
+      }
+    } catch (error) {
+      console.error('Error:', error);
     }
   };
 
@@ -580,23 +577,16 @@ export default function RetrieveCarPage() {
         </>
       )}
 
-      {/* Position Verifier Modal - Shows immediately after joining queue */}
+      {/* Position Verifier Modal */}
       {showPositionVerifier && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full animate-fade-in">
-            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <CheckCircle className="w-6 h-6 text-green-600" />
-            </div>
-            
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
             <h3 className="font-bold text-lg text-center mb-2">
-              ✅ You're in line!
+              What's your queue number?
             </h3>
             
-            <p className="text-sm text-gray-600 text-center mb-1">
-              Lift {justJoinedLift || selectedLift}
-            </p>
-            <p className="text-sm font-medium text-gray-900 text-center mb-4">
-              Tap your position in the queue
+            <p className="text-sm text-gray-600 text-center mb-4">
+              Lift {selectedLift} • Tap your position
             </p>
             
             <div className="grid grid-cols-4 gap-2 mb-4">
@@ -604,7 +594,7 @@ export default function RetrieveCarPage() {
                 <button
                   key={num}
                   onClick={() => handleVerifyPosition(num)}
-                  className="py-4 border-2 border-gray-200 rounded-xl hover:border-parking-blue hover:bg-blue-50 font-bold text-lg transition-all active:bg-parking-blue active:text-white"
+                  className="py-4 border-2 border-gray-200 rounded-xl hover:border-parking-blue hover:bg-blue-50 font-bold text-lg"
                 >
                   #{num}
                 </button>
@@ -616,14 +606,10 @@ export default function RetrieveCarPage() {
                 setShowPositionVerifier(false);
                 setJustJoinedLift('');
               }}
-              className="w-full py-3 text-gray-500 text-sm font-medium hover:text-gray-700"
+              className="w-full py-2 text-gray-500 text-sm"
             >
-              Not sure? Skip
+              Skip
             </button>
-            
-            <p className="text-xs text-gray-400 text-center mt-4">
-              👆 Tap a number above to verify
-            </p>
           </div>
         </div>
       )}
