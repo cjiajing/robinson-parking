@@ -238,55 +238,74 @@ export default function RetrieveCarPage() {
   };
 
   const handleVerifyPosition = async (position) => {
-    // 1. Close popup
+    // 1. CLOSE POPUP IMMEDIATELY
     setShowPositionVerifier(false);
+    setJustJoinedLift('');
     
-    // 2. Get user's current position in digital queue
-    const { data: queueData } = await supabase
-      .from('parking_queue')
-      .select('*')
-      .eq('lift', selectedLift)
-      .eq('status', 'waiting')
-      .order('created_at', { ascending: true });
-    
-    const userIndex = queueData.findIndex(item => item.user_id === userId);
-    const digitalPosition = userIndex + 1;
-    
-    // 3. Calculate discrepancy
-    const discrepancy = position - digitalPosition;
-    
-    if (discrepancy > 0) {
-      // There are MORE people physically than digitally
-      // We need to add "phantom" queue entries
+    try {
+      // 2. Get current queue for this lift
+      const { data: queueData } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
       
-      console.log(`Physical queue has ${discrepancy} more people than digital queue`);
+      // 3. Calculate timestamp for desired position
+      let targetTime;
       
-      // Option: Add placeholder entries for missing people
-      for (let i = 0; i < discrepancy; i++) {
-        await supabase
-          .from('parking_queue')
-          .insert([{
-            user_id: `phantom-${Date.now()}-${i}`,
-            lift: selectedLift,
-            status: 'waiting',
-            is_phantom: true,
-            created_at: new Date().toISOString()
-          }]);
+      if (position === 1) {
+        // First in line - set to oldest possible
+        targetTime = new Date('2024-01-01T00:00:00Z');
+      } else {
+        // Get the person who should be ahead
+        const personAhead = queueData[position - 2];
+        if (personAhead) {
+          // Set time to 1 second after the person ahead
+          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
+        } else {
+          // No one ahead? They must be first
+          targetTime = new Date('2024-01-01T00:00:00Z');
+        }
       }
+      
+      // 4. UPDATE user's position
+      const { error: updateError } = await supabase
+        .from('parking_queue')
+        .update({ 
+          created_at: targetTime.toISOString(),
+          verified_position: position,
+          verified_at: new Date().toISOString()
+        })
+        .eq('user_id', userId)
+        .eq('status', 'waiting');
+      
+      if (updateError) throw updateError;
+      
+      // 5. Record verification
+      await supabase.from('queue_verifications').insert([{
+        lift: selectedLift,
+        count: position,
+        user_id: userId,
+        verified_position: position,
+        created_at: new Date().toISOString()
+      }]);
+      
+      // 6. Update helper count
+      const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
+      localStorage.setItem('user-verifications', newCount.toString());
+      setUserVerificationCount(newCount);
+      
+      // 7. Show success
+      alert(`✅ You are now #${position} in queue`);
+      
+      // 8. Reload queue
+      loadQueueData();
+      
+    } catch (error) {
+      console.error('Error:', error);
+      alert('Failed to update position. Please try again.');
     }
-    
-    // 4. Record verification
-    await supabase.from('queue_verifications').insert([{
-      lift: selectedLift,
-      count: position,
-      user_id: userId,
-      verified_position: position,
-      digital_position: digitalPosition,
-      discrepancy: discrepancy
-    }]);
-    
-    // 5. Reload queue
-    loadQueueData();
   };
 
   const handleManualVerify = async (count) => {
