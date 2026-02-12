@@ -243,46 +243,62 @@ export default function RetrieveCarPage() {
     setJustJoinedLift('');
     
     try {
-      // 2. Get current queue sorted by created_at
-      const { data: queueData } = await supabase
+      console.log('=== VERIFY POSITION START ===');
+      console.log('Requested position:', position);
+      console.log('Lift:', selectedLift);
+      console.log('User ID:', userId);
+      
+      // 2. Get current queue
+      const { data: queueData, error: fetchError } = await supabase
         .from('parking_queue')
         .select('*')
         .eq('lift', selectedLift)
         .eq('status', 'waiting')
         .order('created_at', { ascending: true });
       
-      // 3. Calculate the timestamp for desired position
+      if (fetchError) throw fetchError;
+      
+      console.log('Current queue before update:');
+      queueData.forEach((user, index) => {
+        console.log(`#${index + 1}: ${user.user_id.slice(-4)} - ${user.created_at}`);
+      });
+      
+      // 3. Find current user position
+      const userIndex = queueData.findIndex(item => item.user_id === userId);
+      console.log('Current user position:', userIndex + 1);
+      console.log('Requested position:', position);
+      
+      // 4. Calculate timestamp
       let targetTime;
       
       if (position === 1) {
-        // Want to be FIRST - set to oldest possible
         targetTime = new Date('2024-01-01T00:00:00Z');
+        console.log('Setting as #1');
       } 
       else if (position > queueData.length) {
-        // Want to be LAST - set to now
         targetTime = new Date();
+        console.log('Setting as last position');
       }
       else {
-        // Want to be in the middle
-        // Get the person currently at this position (0-indexed)
-        const personAtPosition = queueData[position - 1];
-        // Get the person before them
-        const personBefore = queueData[position - 2];
+        // Get the person who should be ahead of you
+        const personAhead = queueData[position - 2];
+        console.log('Person ahead:', personAhead?.user_id.slice(-4));
+        console.log('Person ahead time:', personAhead?.created_at);
         
-        if (personBefore) {
-          // Set time between personBefore and personAtPosition
-          const beforeTime = new Date(personBefore.created_at).getTime();
-          const currentTime = new Date(personAtPosition.created_at).getTime();
-          // Set to midpoint + 1ms to ensure we're after personBefore
-          targetTime = new Date(beforeTime + ((currentTime - beforeTime) / 2));
+        if (personAhead) {
+          // Set time to 1 second after person ahead
+          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
+          console.log('Setting time to 1 second after person ahead');
         } else {
-          // No one before? Must be first
           targetTime = new Date('2024-01-01T00:00:00Z');
+          console.log('No person ahead, setting as #1');
         }
       }
       
-      // 4. UPDATE user's position
-      const { error } = await supabase
+      console.log('Target time:', targetTime.toISOString());
+      
+      // 5. Update user's position
+      const { error: updateError } = await supabase
         .from('parking_queue')
         .update({ 
           created_at: targetTime.toISOString()
@@ -290,9 +306,10 @@ export default function RetrieveCarPage() {
         .eq('user_id', userId)
         .eq('status', 'waiting');
       
-      if (error) throw error;
+      if (updateError) throw updateError;
+      console.log('Update successful');
       
-      // 5. Record verification
+      // 6. Record verification
       await supabase.from('queue_verifications').insert([{
         lift: selectedLift,
         count: position,
@@ -301,16 +318,34 @@ export default function RetrieveCarPage() {
         created_at: new Date().toISOString()
       }]);
       
-      // 6. Update helper count
+      // 7. Update helper count
       const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
       localStorage.setItem('user-verifications', newCount.toString());
       setUserVerificationCount(newCount);
       
-      // 7. Show success
+      // 8. Show success
       alert(`✅ You are now #${position} in queue`);
       
-      // 8. Reload queue
-      loadQueueData();
+      // 9. Reload queue
+      await loadQueueData();
+      
+      // 10. Check new position
+      const { data: newQueue } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+      
+      console.log('Queue after update:');
+      newQueue.forEach((user, index) => {
+        console.log(`#${index + 1}: ${user.user_id.slice(-4)} - ${user.created_at}`);
+        if (user.user_id === userId) {
+          console.log(`✅ USER NOW AT POSITION #${index + 1}`);
+        }
+      });
+      
+      console.log('=== VERIFY POSITION END ===');
       
     } catch (error) {
       console.error('Error:', error);
