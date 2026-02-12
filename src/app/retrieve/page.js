@@ -243,13 +243,18 @@ export default function RetrieveCarPage() {
     setJustJoinedLift('');
     
     try {
+      console.log('Updating position to:', position);
+      console.log('User ID:', userId);
+      console.log('Lift:', selectedLift);
+      
       // 2. Calculate timestamp based on position
-      // #1 = 10 minutes ago, #2 = 8 mins ago, #3 = 6 mins ago, etc.
-      const minutesAgo = (position - 1) * 2; // 2 minutes per position
+      const minutesAgo = (position - 1) * 2;
       const targetTime = new Date(Date.now() - (minutesAgo * 60000));
       
+      console.log('Setting created_at to:', targetTime.toISOString());
+      
       // 3. UPDATE user's position
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('parking_queue')
         .update({ 
           created_at: targetTime.toISOString(),
@@ -257,17 +262,28 @@ export default function RetrieveCarPage() {
           verified_at: new Date().toISOString()
         })
         .eq('user_id', userId)
-        .eq('status', 'waiting');
+        .eq('status', 'waiting')
+        .select();
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
+      
+      console.log('Update successful:', data);
       
       // 4. Record verification
-      await supabase.from('queue_verifications').insert([{
-        lift: selectedLift,
-        count: position,
-        user_id: userId,
-        verified_position: position
-      }]);
+      const { error: verifError } = await supabase
+        .from('queue_verifications')
+        .insert([{
+          lift: selectedLift,
+          count: position,
+          user_id: userId,
+          verified_position: position,
+          created_at: new Date().toISOString()
+        }]);
+      
+      if (verifError) console.error('Verification insert error:', verifError);
       
       // 5. Update helper count
       const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
@@ -281,8 +297,8 @@ export default function RetrieveCarPage() {
       loadQueueData();
       
     } catch (error) {
-      console.error('Error:', error);
-      alert('Failed to update queue position. Please try again.');
+      console.error('Error in handleVerifyPosition:', error);
+      alert('Failed to update queue position: ' + error.message);
     }
   };
 
