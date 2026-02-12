@@ -243,61 +243,77 @@ export default function RetrieveCarPage() {
     setJustJoinedLift('');
     
     try {
-      console.log('Updating position to:', position);
-      console.log('User ID:', userId);
-      console.log('Lift:', selectedLift);
-      
-      // 2. Calculate timestamp based on position
-      const minutesAgo = (position - 1) * 2;
-      const targetTime = new Date(Date.now() - (minutesAgo * 60000));
-      
-      console.log('Setting created_at to:', targetTime.toISOString());
-      
-      // 3. UPDATE user's position
-      const { data, error } = await supabase
+      // 2. Get current queue sorted by created_at
+      const { data: queueData } = await supabase
         .from('parking_queue')
-        .update({ 
-          created_at: targetTime.toISOString(),
-          verified_position: position,
-          verified_at: new Date().toISOString()
-        })
-        .eq('user_id', userId)
+        .select('*')
+        .eq('lift', selectedLift)
         .eq('status', 'waiting')
-        .select();
+        .order('created_at', { ascending: true });
       
-      if (error) {
-        console.error('Supabase error:', error);
-        throw error;
+      // 3. Calculate the timestamp for desired position
+      let targetTime;
+      
+      if (position === 1) {
+        // Want to be FIRST - set to oldest possible
+        targetTime = new Date('2024-01-01T00:00:00Z');
+      } 
+      else if (position > queueData.length) {
+        // Want to be LAST - set to now
+        targetTime = new Date();
+      }
+      else {
+        // Want to be in the middle
+        // Get the person currently at this position (0-indexed)
+        const personAtPosition = queueData[position - 1];
+        // Get the person before them
+        const personBefore = queueData[position - 2];
+        
+        if (personBefore) {
+          // Set time between personBefore and personAtPosition
+          const beforeTime = new Date(personBefore.created_at).getTime();
+          const currentTime = new Date(personAtPosition.created_at).getTime();
+          // Set to midpoint + 1ms to ensure we're after personBefore
+          targetTime = new Date(beforeTime + ((currentTime - beforeTime) / 2));
+        } else {
+          // No one before? Must be first
+          targetTime = new Date('2024-01-01T00:00:00Z');
+        }
       }
       
-      console.log('Update successful:', data);
+      // 4. UPDATE user's position
+      const { error } = await supabase
+        .from('parking_queue')
+        .update({ 
+          created_at: targetTime.toISOString()
+        })
+        .eq('user_id', userId)
+        .eq('status', 'waiting');
       
-      // 4. Record verification
-      const { error: verifError } = await supabase
-        .from('queue_verifications')
-        .insert([{
-          lift: selectedLift,
-          count: position,
-          user_id: userId,
-          verified_position: position,
-          created_at: new Date().toISOString()
-        }]);
+      if (error) throw error;
       
-      if (verifError) console.error('Verification insert error:', verifError);
+      // 5. Record verification
+      await supabase.from('queue_verifications').insert([{
+        lift: selectedLift,
+        count: position,
+        user_id: userId,
+        verified_position: position,
+        created_at: new Date().toISOString()
+      }]);
       
-      // 5. Update helper count
+      // 6. Update helper count
       const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
       localStorage.setItem('user-verifications', newCount.toString());
       setUserVerificationCount(newCount);
       
-      // 6. Show success
+      // 7. Show success
       alert(`✅ You are now #${position} in queue`);
       
-      // 7. Reload queue
+      // 8. Reload queue
       loadQueueData();
       
     } catch (error) {
-      console.error('Error in handleVerifyPosition:', error);
+      console.error('Error:', error);
       alert('Failed to update queue position: ' + error.message);
     }
   };
