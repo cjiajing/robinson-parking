@@ -261,19 +261,44 @@ export default function RetrieveCarPage() {
         const missingPeople = position - digitalQueueLength;
         console.log(`Adding ${missingPeople} phantom entries to match reported queue`);
         
-        // Add phantom entries
+        // Add phantom entries - MAKE SURE STATUS IS 'waiting'
         for (let i = 0; i < missingPeople; i++) {
           const phantomTime = new Date(Date.now() - (i + 1) * 60000); // 1 min apart
-          await supabase
+          const { error } = await supabase
             .from('parking_queue')
             .insert([{
               user_id: `phantom-${Date.now()}-${i}`,
               lift: selectedLift,
-              status: 'waiting',
+              status: 'waiting',  // MUST be 'waiting', not 'cancelled'
               created_at: phantomTime.toISOString(),
               is_phantom: true
             }]);
+          
+          if (error) console.error('Error adding phantom:', error);
         }
+        
+        // Verify they were added with correct status
+        const { data: verifyPhantoms } = await supabase
+          .from('parking_queue')
+          .select('*')
+          .eq('lift', selectedLift)
+          .eq('status', 'waiting')
+          .eq('is_phantom', true);
+          
+        console.log(`Added ${verifyPhantoms?.length || 0} active phantom entries`);
+        
+        // Now continue with placing user at their position...
+      }
+      // After inserting phantom, check what was actually inserted
+      const { data: checkPhantoms } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('is_phantom', true)
+        .order('created_at', { ascending: false })
+        .limit(missingPeople);
+      
+      console.log('Phantom entries created:', checkPhantoms);
         
         // Now queue length matches what user reported
         // Place user at their reported position
