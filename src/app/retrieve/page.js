@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Car, Clock, Users, Bell, Loader } from 'lucide-react';
+import { ArrowLeft, Car, Clock, Users, Bell, Loader, MapPin, Info } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
@@ -15,8 +15,11 @@ export default function RetrieveCarPage() {
   const [userId, setUserId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [queueData, setQueueData] = useState([]);
+  
+  // Parking details from check-in
+  const [parkingDetails, setParkingDetails] = useState(null);
 
-  // Generate or get user ID
+  // Generate or get user ID and load parking details
   useEffect(() => {
     let storedId = localStorage.getItem('parking-user-id');
     if (!storedId) {
@@ -24,7 +27,53 @@ export default function RetrieveCarPage() {
       localStorage.setItem('parking-user-id', storedId);
     }
     setUserId(storedId);
+    
+    // Load parking details from localStorage first (fast)
+    const savedLift = localStorage.getItem('lastParkingLift');
+    const savedCode = localStorage.getItem('parkingCode');
+    const savedPallet = localStorage.getItem('lastParkingPallet');
+    
+    if (savedLift) {
+      setSelectedLift(savedLift);
+      setParkingDetails({
+        lift: savedLift,
+        code: savedCode || 'Not set',
+        pallet: savedPallet || null,
+        level: savedPallet ? Math.ceil(parseInt(savedPallet) / 8) : null
+      });
+    }
   }, []);
+
+  // Load parking details from Supabase (more accurate)
+  useEffect(() => {
+    if (!userId) return;
+
+    async function loadParkingDetails() {
+      const { data, error } = await supabase
+        .from('user_parking')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (data && !error) {
+        setParkingDetails({
+          lift: data.lift,
+          code: data.code,
+          pallet: data.pallet,
+          level: data.level
+        });
+        
+        // Auto-select the lift from parking
+        if (data.lift) {
+          setSelectedLift(data.lift);
+        }
+      }
+    }
+
+    loadParkingDetails();
+  }, [userId]);
 
   // Load queue data from Supabase
   const loadQueueData = async () => {
@@ -55,6 +104,8 @@ export default function RetrieveCarPage() {
       setQueuePosition(null);
       setIsInQueue(false);
     }
+    
+    setIsLoading(false);
   };
 
   // Initial load and real-time subscription
@@ -64,10 +115,8 @@ export default function RetrieveCarPage() {
       return;
     }
 
-    // Load initial data
-    loadQueueData().then(() => setIsLoading(false));
+    loadQueueData();
 
-    // Set up real-time subscription
     const channel = supabase
       .channel('queue-changes')
       .on(
@@ -90,29 +139,20 @@ export default function RetrieveCarPage() {
   }, [userId, selectedLift]);
 
   const handleJoinQueue = async () => {
-  if (!selectedLift || !userId) return;
+    if (!selectedLift || !userId) return;
 
-  try {
-    // Check if already in queue
-    const { data: existing, error: checkError } = await supabase
+    const { data: existing } = await supabase
       .from('parking_queue')
       .select('*')
       .eq('user_id', userId)
       .eq('status', 'waiting')
       .maybeSingle();
 
-    if (checkError) {
-      console.error('Error checking queue:', checkError);
-      alert('Error checking queue status');
-      return;
-    }
-
     if (existing) {
       alert('You are already in the queue!');
       return;
     }
 
-    // Join queue - let database set created_at automatically
     const { error } = await supabase
       .from('parking_queue')
       .insert([
@@ -120,21 +160,16 @@ export default function RetrieveCarPage() {
           user_id: userId,
           lift: selectedLift,
           status: 'waiting'
-          // Don't include created_at - let database use default now()
         }
       ]);
 
     if (error) {
       console.error('Error joining queue:', error);
-      alert(`Failed to join queue: ${error.message}`);
+      alert('Failed to join queue. Please try again.');
     } else {
       alert(`✅ Joined queue for Lift ${selectedLift}`);
     }
-  } catch (err) {
-    console.error('Unexpected error:', err);
-    alert('An unexpected error occurred');
-  }
-};
+  };
 
   const handleLeaveQueue = async () => {
     if (!userId) return;
@@ -151,6 +186,8 @@ export default function RetrieveCarPage() {
     if (error) {
       console.error('Error leaving queue:', error);
       alert('Failed to leave queue.');
+    } else {
+      alert('Left the queue');
     }
   };
 
@@ -170,7 +207,7 @@ export default function RetrieveCarPage() {
       console.error('Error updating status:', error);
       alert('Failed to update status.');
     } else {
-      alert('Car retrieved successfully!');
+      alert('✅ Car retrieved successfully!');
     }
   };
 
@@ -194,16 +231,16 @@ export default function RetrieveCarPage() {
         </header>
         <div className="text-center py-12">
           <Loader className="w-8 h-8 animate-spin text-parking-blue mx-auto" />
-          <p className="mt-2 text-gray-600">Loading queue information...</p>
+          <p className="mt-2 text-gray-600">Loading your parking details...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-md mx-auto p-4">
+    <div className="max-w-md mx-auto p-4 pb-24">
       <header className="mb-6">
-        <Link href="/" className="inline-flex items-center gap-2 text-gray-600 mb-4">
+        <Link href="/" className="inline-flex items-center gap-2 text-gray-600 mb-4 hover:text-gray-900">
           <ArrowLeft className="w-4 h-4" />
           Back
         </Link>
@@ -211,36 +248,90 @@ export default function RetrieveCarPage() {
         <p className="text-gray-600">Join queue to retrieve your vehicle</p>
       </header>
 
-      {/* Lift Selection */}
+      {/* Parking Details Card - Show where user parked */}
+      {parkingDetails && (
+        <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 bg-parking-blue/10 rounded-full flex items-center justify-center">
+              <MapPin className="w-5 h-5 text-parking-blue" />
+            </div>
+            <div className="flex-1">
+              <h2 className="font-semibold text-gray-900 mb-1">Your Parked Car</h2>
+              <div className="space-y-1">
+                <p className="text-sm">
+                  <span className="text-gray-600">Lift:</span>{' '}
+                  <span className="font-mono font-bold text-parking-blue">{parkingDetails.lift}</span>
+                </p>
+                <p className="text-sm">
+                  <span className="text-gray-600">Code:</span>{' '}
+                  <span className="font-mono font-bold">{parkingDetails.code}</span>
+                </p>
+                {parkingDetails.pallet && (
+                  <p className="text-sm">
+                    <span className="text-gray-600">Pallet:</span>{' '}
+                    <span className="font-mono font-bold">#{parkingDetails.pallet}</span>
+                    {parkingDetails.level && (
+                      <span className="text-xs text-gray-500 ml-2">
+                        (Level {parkingDetails.level})
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
+              <Link 
+                href="/checkin" 
+                className="inline-block mt-3 text-xs text-parking-blue hover:underline"
+              >
+                Update parking location →
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lift Selection - Auto-selected but can change */}
       <div className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          1. Select Lift <span className="text-red-500">*</span>
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">
+            1. Select Lift <span className="text-red-500">*</span>
+          </h2>
+          {parkingDetails && (
+            <span className="text-xs bg-gray-100 px-2 py-1 rounded-full text-gray-600">
+              Auto-selected from parking
+            </span>
+          )}
+        </div>
         <div className="flex gap-4">
           <button
             onClick={() => setSelectedLift('A')}
-            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
+            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg transition-all ${
               selectedLift === 'A' 
-                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
-                : 'border-gray-200 bg-white text-gray-700'
+                ? 'border-parking-blue bg-blue-50 text-parking-blue ring-2 ring-blue-200' 
+                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
             }`}
           >
             Lift A
           </button>
           <button
             onClick={() => setSelectedLift('B')}
-            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg ${
+            className={`flex-1 py-4 rounded-xl border-2 font-bold text-lg transition-all ${
               selectedLift === 'B' 
-                ? 'border-parking-blue bg-blue-50 text-parking-blue' 
-                : 'border-gray-200 bg-white text-gray-700'
+                ? 'border-parking-blue bg-blue-50 text-parking-blue ring-2 ring-blue-200' 
+                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
             }`}
           >
             Lift B
           </button>
         </div>
+        {parkingDetails && parkingDetails.lift !== selectedLift && (
+          <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+            <Info className="w-3 h-3" />
+            You parked at Lift {parkingDetails.lift}. Are you sure?
+          </p>
+        )}
       </div>
 
-      {/* Queue Info - Only show if lift is selected */}
+      {/* Queue Info */}
       {selectedLift && (
         <div className="mb-8">
           {/* Queue Length Card */}
@@ -303,26 +394,20 @@ export default function RetrieveCarPage() {
         </div>
       )}
 
-      {/* Queue Preview - Show who's waiting */}
-      {selectedLift && queueLength > 0 && !isInQueue && (
-        <div className="mb-6 p-4 bg-white border border-gray-200 rounded-xl">
-          <h3 className="font-medium text-gray-900 mb-2">People waiting:</h3>
-          <div className="space-y-2">
-            {queueData.slice(0, 3).map((item, index) => (
-              <div key={item.id} className="flex items-center gap-2 text-sm">
-                <span className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium">
-                  #{index + 1}
-                </span>
-                <span className="text-gray-600">
-                  {item.user_id === userId ? 'You' : `User ${item.user_id.slice(-4)}`}
-                </span>
-              </div>
-            ))}
-            {queueLength > 3 && (
-              <p className="text-xs text-gray-500 mt-1">
-                and {queueLength - 3} more...
+      {/* Quick Reminder */}
+      {!parkingDetails && (
+        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
+          <div className="flex items-start gap-2">
+            <Info className="w-5 h-5 text-yellow-600 mt-0.5" />
+            <div>
+              <p className="text-sm text-yellow-800 font-medium">No parking record found</p>
+              <p className="text-xs text-yellow-700 mt-1">
+                Have you checked in?{' '}
+                <Link href="/checkin" className="font-medium underline">
+                  Check in your car first
+                </Link>
               </p>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -339,14 +424,6 @@ export default function RetrieveCarPage() {
           </div>
         </div>
       </div>
-
-      {/* No Lift Selected Message */}
-      {!selectedLift && (
-        <div className="text-center py-8 text-gray-500">
-          <Car className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-          <p>Please select a lift to join the queue</p>
-        </div>
-      )}
     </div>
   );
 }
