@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ArrowLeft, Car, Clock, Users, Bell, Loader, 
-  MapPin, Info, CheckCircle, HelpCircle, X, Crown 
+  MapPin, Info, CheckCircle, HelpCircle, X, Crown,
+  Ghost
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -21,6 +22,7 @@ export default function RetrieveCarPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [queueData, setQueueData] = useState([]);
   const [parkingDetails, setParkingDetails] = useState(null);
+  const [phantomCount, setPhantomCount] = useState(0);
   
   // Queue verification state
   const [showPositionVerifier, setShowPositionVerifier] = useState(false);
@@ -90,9 +92,96 @@ export default function RetrieveCarPage() {
     loadParkingDetails();
   }, [userId]);
 
+  // Clean up expired phantoms and cascade timers
+  const cleanupExpiredPhantoms = async () => {
+    const now = new Date().toISOString();
+    
+    // Find expired phantoms
+    const { data: expired } = await supabase
+      .from('parking_queue')
+      .select('*')
+      .eq('is_phantom', true)
+      .eq('status', 'waiting')
+      .lt('expires_at', now);
+    
+    if (expired?.length > 0) {
+      console.log(`Expiring ${expired.length} phantom entries`);
+      
+      for (const phantom of expired) {
+        // Cancel this phantom
+        await supabase
+          .from('parking_queue')
+          .update({ status: 'cancelled' })
+          .eq('id', phantom.id);
+          
+        // Find next phantom in queue
+        const { data: nextPhantoms } = await supabase
+          .from('parking_queue')
+          .select('*')
+          .eq('lift', phantom.lift)
+          .eq('status', 'waiting')
+          .eq('is_phantom', true)
+          .gt('created_at', phantom.created_at)
+          .order('created_at', { ascending: true })
+          .limit(1);
+          
+        if (nextPhantoms?.[0]) {
+          // Start their 5min timer
+          const nextExpiry = new Date(Date.now() + 5 * 60000);
+          await supabase
+            .from('parking_queue')
+            .update({ expires_at: nextExpiry.toISOString() })
+            .eq('id', nextPhantoms[0].id);
+          
+          console.log(`Started 5min timer for next phantom`);
+        }
+      }
+    }
+  };
+
+  // Create phantom entry with proper expiry
+  const createPhantomWithExpiry = async (lift, position, currentQueue) => {
+    // Calculate when this phantom should expire
+    // Each person ahead adds 5 minutes
+    let expiryTime = new Date();
+    
+    // Add 5 minutes for each person ahead
+    for (let i = 0; i < position - 1; i++) {
+      const personAhead = currentQueue[i];
+      if (personAhead?.user_id?.startsWith('phantom-')) {
+        // If person ahead is phantom, they need to expire first
+        // Add their 5min + our 5min
+        expiryTime = new Date(expiryTime.getTime() + 5 * 60000);
+      } else {
+        // Real person ahead - they'll retrieve whenever
+        // We start our 5min from now
+        expiryTime = new Date(Date.now() + 5 * 60000);
+      }
+    }
+    
+    const phantomId = `phantom-${Date.now()}-${position}-${Math.random().toString(36).substr(2, 8)}`;
+    const createdTime = new Date(Date.now() - (position * 60000)); // Position-based timestamp
+    
+    const { error } = await supabase
+      .from('parking_queue')
+      .insert([{
+        user_id: phantomId,
+        lift: lift,
+        status: 'waiting',
+        created_at: createdTime.toISOString(),
+        expires_at: expiryTime.toISOString(),
+        is_phantom: true
+      }]);
+      
+    return { error, phantomId };
+  };
+
   // Load queue data and verifications
   const loadQueueData = async () => {
     if (!selectedLift) return;
+
+    // Clean up expired phantoms first
+    await cleanupExpiredPhantoms();
 
     // Load digital queue
     const { data, error } = await supabase
@@ -107,6 +196,9 @@ export default function RetrieveCarPage() {
       return;
     }
 
+    // Count phantoms
+    const phantoms = data?.filter(item => item.is_phantom === true) || [];
+    setPhantomCount(phantoms.length);
     setQueueData(data || []);
     setQueueLength(data?.length || 0);
 
@@ -123,14 +215,14 @@ export default function RetrieveCarPage() {
     if (!verifError && verifications) {
       setRecentVerifications(verifications);
       
-      // Calculate weighted average (more recent = higher weight)
+      // Calculate weighted average
       if (verifications.length > 0) {
         let totalWeight = 0;
         let weightedSum = 0;
         
         verifications.forEach((v, index) => {
           const weight = verifications.length - index;
-          weightedSum += v.count * weight;
+          weightedSum += v.reported_position * weight;
           totalWeight += weight;
         });
         
@@ -222,7 +314,9 @@ export default function RetrieveCarPage() {
         {
           user_id: userId,
           lift: selectedLift,
-          status: 'waiting'
+          status: 'waiting',
+          created_at: new Date().toISOString(),
+          is_phantom: false
         }
       ]);
 
@@ -230,9 +324,7 @@ export default function RetrieveCarPage() {
       console.error('Error joining queue:', error);
       alert('Failed to join queue. Please try again.');
     } else {
-      // Store which lift they joined
       setJustJoinedLift(selectedLift);
-      // Show position verifier immediately
       setShowPositionVerifier(true);
     }
   };
@@ -259,49 +351,15 @@ export default function RetrieveCarPage() {
       // CASE 1: User reports MORE people than digital queue
       if (position > digitalQueueLength) {
         const missingPeople = position - digitalQueueLength;
-        console.log(`Adding ${missingPeople} phantom entries to match reported queue`);
+        console.log(`Adding ${missingPeople} phantom entries`);
         
-        // Add phantom entries - MAKE SURE STATUS IS 'waiting'
+        // Add phantom entries with proper expiry
         for (let i = 0; i < missingPeople; i++) {
-          const phantomTime = new Date(Date.now() - (i + 1) * 60000); // 1 min apart
-          const { error } = await supabase
-            .from('parking_queue')
-            .insert([{
-              user_id: `phantom-${Date.now()}-${i}`,
-              lift: selectedLift,
-              status: 'waiting',  // MUST be 'waiting', not 'cancelled'
-              created_at: phantomTime.toISOString(),
-              is_phantom: true
-            }]);
-          
-          if (error) console.error('Error adding phantom:', error);
+          const phantomPosition = digitalQueueLength + i + 1;
+          await createPhantomWithExpiry(selectedLift, phantomPosition, queueData);
         }
         
-        // Verify they were added with correct status
-        const { data: verifyPhantoms } = await supabase
-          .from('parking_queue')
-          .select('*')
-          .eq('lift', selectedLift)
-          .eq('status', 'waiting')
-          .eq('is_phantom', true);
-          
-        console.log(`Added ${verifyPhantoms?.length || 0} active phantom entries`);
-        
-        // Now continue with placing user at their position...
-      }
-      // After inserting phantom, check what was actually inserted
-      const { data: checkPhantoms } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('is_phantom', true)
-        .order('created_at', { ascending: false })
-        .limit(missingPeople);
-      
-      console.log('Phantom entries created:', checkPhantoms);
-        
-        // Now queue length matches what user reported
-        // Place user at their reported position
+        // Get updated queue
         const { data: newQueue } = await supabase
           .from('parking_queue')
           .select('*')
@@ -309,6 +367,7 @@ export default function RetrieveCarPage() {
           .eq('status', 'waiting')
           .order('created_at', { ascending: true });
         
+        // Place user at their reported position
         const personAhead = newQueue[position - 2];
         let targetTime;
         
@@ -322,19 +381,19 @@ export default function RetrieveCarPage() {
         
         await supabase
           .from('parking_queue')
-          .update({ created_at: targetTime.toISOString() })
+          .update({ 
+            created_at: targetTime.toISOString(),
+            is_phantom: false 
+          })
           .eq('user_id', userId)
           .eq('status', 'waiting');
         
         alert(`✅ Queue updated to ${position} people. You are #${position}.`);
       }
       
-      // CASE 2: User reports FEWER people than digital queue
+      // CASE 2: User reports FEWER people than their current position
       else if (position < yourCurrentPosition) {
-        alert(`⚠️ You reported #${position} but ${digitalQueueLength} people are in the app queue.\n\nPlease check the physical queue again and verify the correct position.`);
-        
-        // Don't make any changes - ask them to verify again
-        // Optionally, let them try again
+        alert(`⚠️ You reported #${position} but you are currently #${yourCurrentPosition} in the app queue.\n\nPlease check the physical queue again and verify the correct position.`);
         setShowPositionVerifier(true);
       }
       
@@ -354,7 +413,10 @@ export default function RetrieveCarPage() {
         
         await supabase
           .from('parking_queue')
-          .update({ created_at: targetTime.toISOString() })
+          .update({ 
+            created_at: targetTime.toISOString(),
+            is_phantom: false 
+          })
           .eq('user_id', userId)
           .eq('status', 'waiting');
         
@@ -371,8 +433,13 @@ export default function RetrieveCarPage() {
         created_at: new Date().toISOString()
       }]);
       
+      // Update helper count
+      const newCount = userVerificationCount + 1;
+      setUserVerificationCount(newCount);
+      localStorage.setItem('user-verifications', newCount.toString());
+      
       // Reload queue
-      loadQueueData();
+      await loadQueueData();
       
     } catch (error) {
       console.error('Error:', error);
@@ -383,26 +450,52 @@ export default function RetrieveCarPage() {
   const handleManualVerify = async (count) => {
     if (!selectedLift) return;
     
-    const verification = {
-      lift: selectedLift,
-      count: count,
-      user_id: userId,
-      created_at: new Date().toISOString(),
-      type: 'manual_verification'
-    };
-    
-    const { error } = await supabase
-      .from('queue_verifications')
-      .insert([verification]);
+    try {
+      // Get current queue
+      const { data: queueData } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
       
-    if (!error) {
+      const digitalQueueLength = queueData.length;
+      
+      // If reported count is higher than digital queue, add phantoms
+      if (count > digitalQueueLength) {
+        const missingPeople = count - digitalQueueLength;
+        
+        for (let i = 0; i < missingPeople; i++) {
+          const phantomPosition = digitalQueueLength + i + 1;
+          await createPhantomWithExpiry(selectedLift, phantomPosition, queueData);
+        }
+        
+        alert(`✅ Queue updated to ${count} people. Added ${missingPeople} to match your report.`);
+      } else {
+        alert(`✅ Thanks for verifying! Queue reported as ${count} people.`);
+      }
+      
+      // Record verification
+      await supabase.from('queue_verifications').insert([{
+        lift: selectedLift,
+        digital_count: digitalQueueLength,
+        reported_position: count,
+        user_id: userId,
+        action: 'manual_verification',
+        created_at: new Date().toISOString()
+      }]);
+      
+      // Update helper count
       const newCount = userVerificationCount + 1;
       setUserVerificationCount(newCount);
       localStorage.setItem('user-verifications', newCount.toString());
       
-      alert(`✅ Queue updated to ${count} people. Thanks for helping!`);
       setShowManualVerifier(false);
-      loadQueueData();
+      await loadQueueData();
+      
+    } catch (error) {
+      console.error('Error:', error);
+      alert('Failed to update queue. Please try again.');
     }
   };
 
@@ -423,6 +516,7 @@ export default function RetrieveCarPage() {
       alert('Failed to leave queue.');
     } else {
       alert('Left the queue');
+      await loadQueueData();
     }
   };
 
@@ -452,12 +546,13 @@ export default function RetrieveCarPage() {
       
       setParkingDetails(null);
       setSelectedLift('');
+      await loadQueueData();
     }
   };
 
   const calculateWaitTime = (queueCount) => {
     if (!queueCount) return 'N/A';
-    const minutes = (queueCount - (queuePosition || 0)) * 5;
+    const minutes = (queuePosition - 1) * 5;
     if (minutes <= 0) return 'Ready now';
     if (minutes < 60) return `${minutes} minutes`;
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
@@ -584,9 +679,14 @@ export default function RetrieveCarPage() {
                   DIGITAL QUEUE
                 </p>
                 <p className="text-3xl font-bold text-blue-700">{queueLength}</p>
-                <p className="text-xs text-blue-600 mt-1">
-                  Joined via app
-                </p>
+                <div className="flex items-center gap-1 mt-1">
+                  <p className="text-xs text-blue-600">
+                    {phantomCount > 0 ? `${phantomCount} waiting virtually` : 'No virtual waiters'}
+                  </p>
+                  {phantomCount > 0 && (
+                    <Ghost className="w-3 h-3 text-blue-400" />
+                  )}
+                </div>
               </div>
               
               {/* Verified Queue */}
@@ -654,7 +754,7 @@ export default function RetrieveCarPage() {
             </button>
           )}
 
-          {/* Manual Verification Button (for people already in queue) */}
+          {/* Manual Verification Button */}
           {!isInQueue && (
             <button
               onClick={() => setShowManualVerifier(true)}
@@ -765,6 +865,12 @@ export default function RetrieveCarPage() {
             <p className="text-xs text-blue-600">
               Digital: {queueLength} • Verified: {verifiedQueue || '?'} • {recentVerifications.length} verifications
             </p>
+            {phantomCount > 0 && (
+              <p className="text-xs text-blue-600 mt-1 flex items-center gap-1">
+                <Ghost className="w-3 h-3" /> 
+                {phantomCount} virtual waiting • Auto-expires in 5min when at #1
+              </p>
+            )}
           </div>
         </div>
       </div>
