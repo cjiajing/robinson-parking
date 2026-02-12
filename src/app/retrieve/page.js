@@ -243,34 +243,13 @@ export default function RetrieveCarPage() {
     setJustJoinedLift('');
     
     try {
-      // 2. Get current queue for this lift
-      const { data: queueData } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
+      // 2. Calculate timestamp based on position
+      // #1 = 10 minutes ago, #2 = 8 mins ago, #3 = 6 mins ago, etc.
+      const minutesAgo = (position - 1) * 2; // 2 minutes per position
+      const targetTime = new Date(Date.now() - (minutesAgo * 60000));
       
-      // 3. Calculate timestamp for desired position
-      let targetTime;
-      
-      if (position === 1) {
-        // First in line - set to oldest possible
-        targetTime = new Date('2024-01-01T00:00:00Z');
-      } else {
-        // Get the person who should be ahead
-        const personAhead = queueData[position - 2];
-        if (personAhead) {
-          // Set time to 1 second after the person ahead
-          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-        } else {
-          // No one ahead? They must be first
-          targetTime = new Date('2024-01-01T00:00:00Z');
-        }
-      }
-      
-      // 4. UPDATE user's position
-      const { error: updateError } = await supabase
+      // 3. UPDATE user's position
+      const { error } = await supabase
         .from('parking_queue')
         .update({ 
           created_at: targetTime.toISOString(),
@@ -280,31 +259,30 @@ export default function RetrieveCarPage() {
         .eq('user_id', userId)
         .eq('status', 'waiting');
       
-      if (updateError) throw updateError;
+      if (error) throw error;
       
-      // 5. Record verification
+      // 4. Record verification
       await supabase.from('queue_verifications').insert([{
         lift: selectedLift,
         count: position,
         user_id: userId,
-        verified_position: position,
-        created_at: new Date().toISOString()
+        verified_position: position
       }]);
       
-      // 6. Update helper count
+      // 5. Update helper count
       const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
       localStorage.setItem('user-verifications', newCount.toString());
       setUserVerificationCount(newCount);
       
-      // 7. Show success
+      // 6. Show success
       alert(`✅ You are now #${position} in queue`);
       
-      // 8. Reload queue
+      // 7. Reload queue
       loadQueueData();
       
     } catch (error) {
       console.error('Error:', error);
-      alert('Failed to update position. Please try again.');
+      alert('Failed to update queue position. Please try again.');
     }
   };
 
