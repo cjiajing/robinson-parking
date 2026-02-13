@@ -356,186 +356,25 @@ export default function RetrieveCarPage() {
   const handleVerifyPosition = async (position) => {
     console.log('========== VERIFY POSITION ==========');
     console.log('1. Requested position:', position);
-    console.log('2. Closing verifier modal');
     
     // Close popup immediately
     setShowPositionVerifier(false);
     setJustJoinedLift('');
     
     try {
-      // FIRST: Verify the user actually exists in the queue
-      console.log('3. Checking if user exists in queue...');
-      const { data: userCheck, error: checkError } = await supabase
+      // Check if user exists
+      const { data: userCheck } = await supabase
         .from('parking_queue')
         .select('*')
         .eq('user_id', userId)
         .eq('status', 'waiting')
         .maybeSingle();
       
-      if (checkError) {
-        console.error('4. Error checking user:', checkError);
-        throw checkError;
-      }
-      
       if (!userCheck) {
-        console.error('4. USER NOT FOUND IN QUEUE!');
         alert('You are not in the queue. Please join first.');
         return;
       }
       
-      console.log('4. User found in queue:', userCheck);
-      console.log('5. Current created_at:', userCheck.created_at);
-      
-      // Get current queue
-      console.log('6. Fetching current queue...');
-      const { data: queueData, error: fetchError } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
-      
-      if (fetchError) throw fetchError;
-      
-      console.log('7. Current queue length:', queueData.length);
-      queueData.forEach((u, i) => {
-        console.log(`   Queue #${i+1}: ${u.user_id.slice(-8)} (${u.is_phantom ? 'phantom' : 'real'}) - ${u.created_at}`);
-      });
-      
-      const currentPosition = queueData.findIndex(item => item.user_id === userId) + 1;
-      console.log(`8. Current position: #${currentPosition}`);
-      
-      // Add phantom entries if needed
-      if (position > queueData.length) {
-        const missingPeople = position - queueData.length;
-        console.log(`9. Adding ${missingPeople} phantom entries...`);
-        
-        for (let i = 0; i < missingPeople; i++) {
-          const phantomPosition = queueData.length + i + 1;
-          console.log(`   Adding phantom at position #${phantomPosition}`);
-          
-          let phantomTime;
-          if (phantomPosition === 1) {
-            phantomTime = new Date('2024-01-01T00:00:00Z');
-          } else {
-            phantomTime = new Date(Date.now() - (phantomPosition * 60000));
-          }
-          
-          const phantomId = `phantom-${Date.now()}-${phantomPosition}-${Math.random().toString(36).substr(2, 5)}`;
-          
-          const { error: phantomError } = await supabase
-            .from('parking_queue')
-            .insert([{
-              user_id: phantomId,
-              lift: selectedLift,
-              status: 'waiting',
-              created_at: phantomTime.toISOString(),
-              expires_at: new Date(Date.now() + 30 * 60000).toISOString(),
-              is_phantom: true
-            }]);
-          
-          if (phantomError) {
-            console.error('   Error adding phantom:', phantomError);
-          } else {
-            console.log(`   Phantom added: ${phantomId}`);
-          }
-        }
-      }
-      
-      // Get updated queue
-      console.log('10. Fetching updated queue...');
-      const { data: updatedQueue } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
-      
-      console.log('11. Updated queue length:', updatedQueue.length);
-      
-      // Calculate timestamp for desired position
-      let targetTime;
-      
-      if (position === 1) {
-        targetTime = new Date('2024-01-01T00:00:00Z');
-        console.log('12. Setting as #1 (oldest timestamp)');
-      } else {
-        const personAhead = updatedQueue[position - 2];
-        if (personAhead) {
-          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-          console.log(`12. Setting after ${personAhead.user_id.slice(-8)} (${personAhead.created_at} + 1s)`);
-        } else {
-          targetTime = new Date(Date.now() - (position * 60000));
-          console.log(`12. No person ahead, setting to ${targetTime.toISOString()}`);
-        }
-      }
-      
-      console.log('13. Target created_at:', targetTime.toISOString());
-      
-      // Update user's position
-      console.log('14. Updating user position...');
-      const { error: updateError } = await supabase
-        .from('parking_queue')
-        .update({ 
-          created_at: targetTime.toISOString(),
-          is_phantom: false
-        })
-        .eq('user_id', userId)
-        .eq('status', 'waiting');
-      
-      if (updateError) {
-        console.error('15. UPDATE ERROR:', updateError);
-        throw updateError;
-      }
-      console.log('15. Update successful');
-      
-      // Verify the update
-      const { data: finalQueue } = await supabase
-        .from('parking_queue')
-        .select('*')
-        .eq('lift', selectedLift)
-        .eq('status', 'waiting')
-        .order('created_at', { ascending: true });
-      
-      const newPosition = finalQueue.findIndex(item => item.user_id === userId) + 1;
-      console.log(`16. New position: #${newPosition}`);
-      
-      // Record verification
-      await supabase.from('queue_verifications').insert([{
-        lift: selectedLift,
-        digital_count: updatedQueue.length,
-        reported_position: position,
-        actual_position: newPosition,
-        user_id: userId,
-        created_at: new Date().toISOString()
-      }]);
-      
-      // Update helper count
-      const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
-      localStorage.setItem('user-verifications', newCount.toString());
-      setUserVerificationCount(newCount);
-      
-      // Show success
-      if (newPosition === position) {
-        alert(`✅ You are now #${position} in queue.`);
-      } else {
-        alert(`✅ You are now #${newPosition} in queue.`);
-      }
-      
-      // Reload queue
-      await loadQueueData();
-      
-    } catch (error) {
-      console.error('ERROR in handleVerifyPosition:', error);
-      alert('Failed to update queue position: ' + error.message);
-    }
-    console.log('========== END VERIFY POSITION ==========');
-  };
-
-  const handleManualVerify = async (count) => {
-    if (!selectedLift) return;
-    
-    try {
       // Get current queue
       const { data: queueData } = await supabase
         .from('parking_queue')
@@ -544,43 +383,77 @@ export default function RetrieveCarPage() {
         .eq('status', 'waiting')
         .order('created_at', { ascending: true });
       
-      const digitalQueueLength = queueData.length;
+      console.log(`Current queue: ${queueData.length} people`);
       
-      // If reported count is higher than digital queue, add phantoms
-      if (count > digitalQueueLength) {
-        const missingPeople = count - digitalQueueLength;
-        
-        for (let i = 0; i < missingPeople; i++) {
-          const phantomPosition = digitalQueueLength + i + 1;
-          await createPhantomWithExpiry(selectedLift, phantomPosition, queueData);
-        }
-        
-        alert(`✅ Queue updated to ${count} people. Added ${missingPeople} to match your report.`);
-      } else {
-        alert(`✅ Thanks for verifying! Queue reported as ${count} people.`);
+      // SIMPLE RULE: You cannot be ahead of your actual position
+      // If you're the only person, you are #1
+      if (queueData.length === 1) {
+        console.log('Only person in queue, staying at #1');
+        alert(`✅ You are #1 in queue.`);
+        await loadQueueData();
+        return;
       }
       
-      // Record verification
-      await supabase.from('queue_verifications').insert([{
-        lift: selectedLift,
-        digital_count: digitalQueueLength,
-        reported_position: count,
-        user_id: userId,
-        action: 'manual_verification',
-        created_at: new Date().toISOString()
-      }]);
+      // Calculate timestamp for desired position
+      let targetTime;
       
-      // Update helper count
-      const newCount = userVerificationCount + 1;
-      setUserVerificationCount(newCount);
-      localStorage.setItem('user-verifications', newCount.toString());
+      if (position === 1) {
+        targetTime = new Date('2024-01-01T00:00:00Z');
+      } else {
+        // Get the person ahead
+        const personAhead = queueData[position - 2];
+        if (personAhead) {
+          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
+        } else {
+          // Fallback - set time based on position
+          targetTime = new Date(Date.now() - (position * 60000));
+        }
+      }
       
-      setShowManualVerifier(false);
+      // Update user's position
+      const { error } = await supabase
+        .from('parking_queue')
+        .update({ created_at: targetTime.toISOString() })
+        .eq('user_id', userId)
+        .eq('status', 'waiting');
+      
+      if (error) throw error;
+      
+      // Verify new position
+      const { data: finalQueue } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+      
+      const newPosition = finalQueue.findIndex(item => item.user_id === userId) + 1;
+      console.log(`New position: #${newPosition}`);
+      
+      alert(`✅ You are now #${newPosition} in queue.`);
       await loadQueueData();
       
     } catch (error) {
       console.error('Error:', error);
-      alert('Failed to update queue. Please try again.');
+      alert('Failed to update queue position.');
+    }
+    console.log('========== END VERIFY POSITION ==========');
+  };
+
+  const handleManualVerify = async (count) => {
+    if (!selectedLift) return;
+    
+    try {
+      alert(`✅ Thanks for verifying! Queue reported as ${count} people.`);
+      setShowManualVerifier(false);
+      
+      // Just record in localStorage, not in database
+      const newCount = (parseInt(localStorage.getItem('user-verifications') || '0')) + 1;
+      localStorage.setItem('user-verifications', newCount.toString());
+      setUserVerificationCount(newCount);
+      
+    } catch (error) {
+      console.error('Error:', error);
     }
   };
 
