@@ -141,26 +141,25 @@ export default function RetrieveCarPage() {
 
   // Create phantom entry with proper expiry
   const createPhantomWithExpiry = async (lift, position, currentQueue) => {
-    // Calculate when this phantom should expire
-    // Each person ahead adds 5 minutes
-    let expiryTime = new Date();
+    // Calculate timestamp for this position
+    let createdTime;
     
-    // Add 5 minutes for each person ahead
-    for (let i = 0; i < position - 1; i++) {
-      const personAhead = currentQueue[i];
-      if (personAhead?.user_id?.startsWith('phantom-')) {
-        // If person ahead is phantom, they need to expire first
-        // Add their 5min + our 5min
-        expiryTime = new Date(expiryTime.getTime() + 5 * 60000);
+    if (position === 1) {
+      createdTime = new Date('2024-01-01T00:00:00Z');
+    } else {
+      const personAhead = currentQueue[position - 2];
+      if (personAhead) {
+        // Set time to 1 second after person ahead
+        createdTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
       } else {
-        // Real person ahead - they'll retrieve whenever
-        // We start our 5min from now
-        expiryTime = new Date(Date.now() + 5 * 60000);
+        createdTime = new Date(Date.now() - (position * 60000));
       }
     }
     
+    // Calculate expiry - 5 minutes after the person ahead of them would retrieve
+    let expiryTime = new Date(Date.now() + (position * 5 * 60000));
+    
     const phantomId = `phantom-${Date.now()}-${position}-${Math.random().toString(36).substr(2, 8)}`;
-    const createdTime = new Date(Date.now() - (position * 60000)); // Position-based timestamp
     
     const { error } = await supabase
       .from('parking_queue')
@@ -346,81 +345,79 @@ export default function RetrieveCarPage() {
       const yourCurrentPosition = queueData.findIndex(item => item.user_id === userId) + 1;
       
       console.log(`Digital queue: ${digitalQueueLength} people`);
-      console.log(`User reports: #${position} (${position} people in queue)`);
+      console.log(`User reports: #${position}`);
+      console.log(`Current position: #${yourCurrentPosition}`);
       
       // CASE 1: User reports MORE people than digital queue
       if (position > digitalQueueLength) {
         const missingPeople = position - digitalQueueLength;
         console.log(`Adding ${missingPeople} phantom entries`);
         
-        // Add phantom entries with proper expiry
+        // Add phantom entries
         for (let i = 0; i < missingPeople; i++) {
           const phantomPosition = digitalQueueLength + i + 1;
           await createPhantomWithExpiry(selectedLift, phantomPosition, queueData);
         }
-        
-        // Get updated queue
-        const { data: newQueue } = await supabase
-          .from('parking_queue')
-          .select('*')
-          .eq('lift', selectedLift)
-          .eq('status', 'waiting')
-          .order('created_at', { ascending: true });
-        
-        // Place user at their reported position
-        const personAhead = newQueue[position - 2];
-        let targetTime;
-        
-        if (position === 1) {
-          targetTime = new Date('2024-01-01T00:00:00Z');
-        } else if (personAhead) {
-          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-        } else {
-          targetTime = new Date();
-        }
-        
-        await supabase
-          .from('parking_queue')
-          .update({ 
-            created_at: targetTime.toISOString(),
-            is_phantom: false 
-          })
-          .eq('user_id', userId)
-          .eq('status', 'waiting');
-        
-        alert(`✅ Queue updated to ${position} people. You are #${position}.`);
       }
       
-      // CASE 2: User reports FEWER people than their current position
-      else if (position < yourCurrentPosition) {
-        alert(`⚠️ You reported #${position} but you are currently #${yourCurrentPosition} in the app queue.\n\nPlease check the physical queue again and verify the correct position.`);
-        setShowPositionVerifier(true);
+      // Get updated queue after adding phantoms
+      const { data: updatedQueue } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+      
+      // IMPORTANT: Place user at EXACTLY their reported position
+      // Get the person who should be ahead of them
+      let targetTime;
+      
+      if (position === 1) {
+        // User wants to be first - set to oldest possible
+        targetTime = new Date('2024-01-01T00:00:00Z');
+        console.log('Setting as #1');
+      } else {
+        // Get the person who should be ahead at position-1
+        const personAhead = updatedQueue[position - 2];
+        
+        if (personAhead) {
+          // Set time to 1 second AFTER the person ahead
+          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
+          console.log(`Setting after ${personAhead.user_id.slice(-4)} at #${position-1}`);
+        } else {
+          // No one ahead? Must be first
+          targetTime = new Date('2024-01-01T00:00:00Z');
+          console.log('No person ahead, setting as #1');
+        }
       }
       
-      // CASE 3: User reports position that matches or is within digital queue
-      else {
-        // Place them at their reported position
-        const personAhead = queueData[position - 2];
-        let targetTime;
-        
-        if (position === 1) {
-          targetTime = new Date('2024-01-01T00:00:00Z');
-        } else if (personAhead) {
-          targetTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-        } else {
-          targetTime = new Date();
-        }
-        
-        await supabase
-          .from('parking_queue')
-          .update({ 
-            created_at: targetTime.toISOString(),
-            is_phantom: false 
-          })
-          .eq('user_id', userId)
-          .eq('status', 'waiting');
-        
-        alert(`✅ You are now #${position} in queue.`);
+      console.log('Target time:', targetTime.toISOString());
+      
+      // Update user's position
+      const { error: updateError } = await supabase
+        .from('parking_queue')
+        .update({ 
+          created_at: targetTime.toISOString(),
+          is_phantom: false 
+        })
+        .eq('user_id', userId)
+        .eq('status', 'waiting');
+      
+      if (updateError) throw updateError;
+      
+      // Verify the update worked
+      const { data: verifyQueue } = await supabase
+        .from('parking_queue')
+        .select('*')
+        .eq('lift', selectedLift)
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true });
+      
+      const newPosition = verifyQueue.findIndex(item => item.user_id === userId) + 1;
+      console.log(`User is now at position: #${newPosition}`);
+      
+      if (newPosition !== position) {
+        console.warn(`Expected #${position} but got #${newPosition}`);
       }
       
       // Record verification
@@ -428,6 +425,7 @@ export default function RetrieveCarPage() {
         lift: selectedLift,
         digital_count: digitalQueueLength,
         reported_position: position,
+        actual_position: newPosition,
         user_id: userId,
         action: position > digitalQueueLength ? 'added_phantom' : 'updated_position',
         created_at: new Date().toISOString()
@@ -437,6 +435,9 @@ export default function RetrieveCarPage() {
       const newCount = userVerificationCount + 1;
       setUserVerificationCount(newCount);
       localStorage.setItem('user-verifications', newCount.toString());
+      
+      // Show success message with actual position
+      alert(`✅ You are now #${newPosition} in queue.`);
       
       // Reload queue
       await loadQueueData();
