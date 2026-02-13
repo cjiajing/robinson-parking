@@ -140,21 +140,33 @@ export default function RetrieveCarPage() {
   };
 
   // Create phantom entry with proper expiry
-  const createPhantomWithExpiry = async (lift, position, currentQueue) => {
-    // Calculate timestamp for this position
-    let createdTime;
+  const createPhantomWithExpiry = async (lift, position) => {
+    // Each position gets 5 minutes of "wait time"
+    // Position 1: expires in 5 min
+    // Position 2: expires in 10 min  
+    // Position 3: expires in 15 min
+    // etc.
     
-    if (position === 1) {
-      createdTime = new Date('2024-01-01T00:00:00Z');
-    } else {
-      const personAhead = currentQueue[position - 2];
-      if (personAhead) {
-        // Set time to 1 second after person ahead
-        createdTime = new Date(new Date(personAhead.created_at).getTime() + 1000);
-      } else {
-        createdTime = new Date(Date.now() - (position * 60000));
-      }
-    }
+    const expiryTime = new Date(Date.now() + (position * 5 * 60000));
+    
+    // Created time should reflect their position in queue
+    const createdTime = new Date(Date.now() - ((position - 1) * 60000));
+    
+    const phantomId = `phantom-${Date.now()}-${position}-${Math.random().toString(36).substr(2, 8)}`;
+    
+    const { error } = await supabase
+      .from('parking_queue')
+      .insert([{
+        user_id: phantomId,
+        lift: lift,
+        status: 'waiting',
+        created_at: createdTime.toISOString(),
+        expires_at: expiryTime.toISOString(),
+        is_phantom: true
+      }]);
+      
+    return { error, phantomId };
+  };
     
     // Calculate expiry - 5 minutes after the person ahead of them would retrieve
     let expiryTime = new Date(Date.now() + (position * 5 * 60000));
