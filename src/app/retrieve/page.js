@@ -167,25 +167,6 @@ export default function RetrieveCarPage() {
       
     return { error, phantomId };
   };
-    
-    // Calculate expiry - 5 minutes after the person ahead of them would retrieve
-    let expiryTime = new Date(Date.now() + (position * 5 * 60000));
-    
-    const phantomId = `phantom-${Date.now()}-${position}-${Math.random().toString(36).substr(2, 8)}`;
-    
-    const { error } = await supabase
-      .from('parking_queue')
-      .insert([{
-        user_id: phantomId,
-        lift: lift,
-        status: 'waiting',
-        created_at: createdTime.toISOString(),
-        expires_at: expiryTime.toISOString(),
-        is_phantom: true
-      }]);
-      
-    return { error, phantomId };
-  };
 
   // Load queue data and verifications
   const loadQueueData = async () => {
